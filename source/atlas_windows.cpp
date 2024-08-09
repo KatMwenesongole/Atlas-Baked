@@ -1,27 +1,48 @@
+// Tedious Typography
+//
+// Font sizes can be specified in points (pt), 1 pt = 1/72 inch (0.35 mm).
+//
+// The font size (height) is broken up into the ascent and descent.
+// Ascent is the space above the baseline.
+// Descent is the space below the baseline.
+//
+// Font size = Ascent + Descent
+// e.g A 72pt font may have an ascent of 56pt and descent of 16pt, thus 72pt = (56pt + 16pt)
+//
+// Font sizes can also be specified in logical units,
+// 1 logical unit = 72pt (1 inch, 2.54 cm).
+// 1 logical unit = DPI (px) (historically 96 px, but can be set on a user by user basis)
+// e.g DPI setting of 100% (96 px), DPI setting of 125% (120 px), DPI setting of 150% (144 px)
+//
+// Font sizes can also be specified in device independent pixels (DIPs), 1 DIP = 1/96 logical unit.
+// Therefore,
+// 1 inch = 72 pt = 1 logical unit = 96 px (DPI, 100%)  = 1 DIP
+// 1 inch = 72 pt = 1 logical unit = 144 px (DPI, 150%) = 1.5 DIP
+//
+// Windows peculiarities
+// Something to note about Windows 'SetProcessDpiAwareness()'.
+// If a program does not set its DPI awareness, then Windows scales the window (among other things) when the users DPI setting is not set to 100%.
+// e.g A DPI unaware program specifies a window size of 500x500 on a machine that has a DPI setting of 150%.
+//     Windows will scale the window to 750x750 (DWM scaling).
+//
+
 #include <windows.h>
 #include <shellscalingapi.h>
 
 #include "p:/shared/shared.cpp"
-#include "p:/shared/shared_opengl.cpp"
-#include "p:/shared/shared_opengl_windows.cpp"
-#include "p:/shared/shared_math.cpp"
 #include "p:/shared/shared_utils.cpp"
 #include "p:/shared/shared_windows.cpp"
+#include "p:/shared/shared_math.cpp"
 #include "p:/shared/shared_string.cpp"
-#include "p:/shared/shared_keymap.cpp"
-#include "p:/shared/shared_keymap_windows.cpp"
-
-
-global b32 running;
-global s32 window_width;
-global s32 window_height;
-
-#include "p:/shared/shared_graphics_2d.cpp"
-#include "p:/shared/shared_imgui.cpp"
-
 
 #include <cstdio>
 
+global b32 running;
+global s32 window_width  = 1280;
+global s32 window_height = 720;
+
+global s8 open_file[256] = { };
+global s8 save_file[256] = { };
 
 //
 // combine line spacing and max glyph height?
@@ -486,12 +507,8 @@ packing_node* tree_insertnode(packing_tree* tree, packing_node* node, packing_in
     }
 }
 
-//
 void function()
 {
-    SetProcessDpiAwareness(PROCESS_SYSTEM_DPI_AWARE);
-    u32 DPI = GetDpiForSystem();
-    
     s8* filename = "a:/truetype/Fontin-Regular.ttf";
     s8* fontname = "Fontin";
 
@@ -613,70 +630,149 @@ void function()
     
 }
 
-LRESULT WINAPI
-windows_messageproc(HWND window, UINT message, WPARAM wparam, LPARAM lparam)
+#define SELECT_OPEN_BUTTON 1
+#define SELECT_SAVE_BUTTON 2
+
+global HWND select_open_window = 0;
+global HWND select_save_window = 0;
+
+internal void windows_userinterface(HWND window)
 {
-    if(message == WM_CLOSE)
+    s32 file_width_static = 174;
+    s32 file_width_button = 58;
+    s32 file_width_edit   = 928;
+    
+    CreateWindowA("static", "truetype font:", WS_CHILD | WS_VISIBLE | SS_CENTER,
+		  50, 50,
+		  file_width_static, 30, window, 0, 0, 0);
+    CreateWindowA("button", "...", WS_CHILD | WS_VISIBLE| WS_BORDER,
+		  50 + file_width_static + 10, 50,
+		  file_width_button, 30, window, (HMENU)SELECT_OPEN_BUTTON, 0, 0);
+    select_open_window = CreateWindowA("edit", "C:/", WS_CHILD | WS_VISIBLE| WS_BORDER,
+				       50 + file_width_static + file_width_button + 20, 50,
+				       file_width_edit, 30, window, 0, 0, 0);
+
+    CreateWindowA("static", "save location:", WS_CHILD | WS_VISIBLE | SS_CENTER,
+		  50, 100,
+		  file_width_static, 30, window, 0, 0, 0);
+    CreateWindowA("button", "...", WS_CHILD | WS_VISIBLE| WS_BORDER,
+		  50 + file_width_static + 10, 100,
+		  file_width_button, 30, window, (HMENU)SELECT_SAVE_BUTTON, 0, 0);
+    select_save_window = CreateWindowA("edit", "C:/", WS_CHILD | WS_VISIBLE| WS_BORDER,
+				       50 + file_width_static + file_width_button + 20, 100,
+				       file_width_edit, 30, window, 0, 0, 0);
+
+    s32 size_width_static0 = file_width_static;
+    s32 size_width_static1 = 20;
+    s32 size_width_edit    = 100;
+    CreateWindowA("static", "font size:", WS_CHILD | WS_VISIBLE | SS_CENTER,
+		  50, 150,
+		  size_width_static0, 30, window, 0, 0, 0);
+    CreateWindowA("edit", "72", WS_CHILD | WS_VISIBLE | WS_BORDER,
+		  50 + size_width_static0 + 10, 150,
+		  size_width_edit, 30, window, 0, 0, 0);
+    CreateWindowA("static", "pt", WS_CHILD | WS_VISIBLE,
+		  50 + size_width_static0 + size_width_edit + 20, 150,
+		  size_width_static1, 30, window, 0, 0, 0);
+    
+    s32 create_width_button = 393;
+    CreateWindowA("button", "create", WS_CHILD | WS_VISIBLE| WS_BORDER,
+		  50 + create_width_button, 200, create_width_button, 30, window, 0, 0, 0);
+
+    s32 preview_width_static = file_width_static;
+    CreateWindowA("static", "preview:", WS_CHILD | WS_VISIBLE | SS_CENTER,
+		  50, 250,
+		  preview_width_static, 30, window, 0, 0, 0);
+}
+LRESULT WINAPI windows_procedure_message(HWND window, UINT message, WPARAM wparam, LPARAM lparam)
+{
+    switch(message)
+    {
+    case WM_CLOSE:
     {
 	running = false;
+    }break;
+    case WM_CREATE:
+    {
+	windows_userinterface(window);
+    }break;
+    case WM_COMMAND:
+    {
+	switch(wparam)
+	{
+	case SELECT_OPEN_BUTTON:
+	{
+	    OPENFILENAME o_file = {};
+	    o_file.lStructSize  = sizeof(OPENFILENAME);
+	    o_file.hwndOwner    = window;
+	    o_file.lpstrFile    = open_file;
+	    o_file.lpstrFile[0] = '\0';
+	    o_file.nMaxFile     = 256;
+	    o_file.lpstrFilter  = "Truetype Fonts (.ttf)\0*.TTF\0";
+	    o_file.nFilterIndex = 1;
+
+	    if(GetOpenFileNameA(&o_file))
+	    {
+		SetWindowTextA(select_open_window, o_file.lpstrFile);
+		// CopyMemory(ttf_file, open_file.lpstrFile, open_file.nMaxFile);
+	    }
+	}break;
+	case SELECT_SAVE_BUTTON:
+	{
+	    OPENFILENAME s_file = {};
+	    s_file.lStructSize  = sizeof(OPENFILENAME);
+	    s_file.hwndOwner    = window;
+	    s_file.lpstrFile    = save_file;
+	    s_file.lpstrFile[0] = '\0';
+	    s_file.nMaxFile     = 256;
+	    s_file.lpstrFilter  = "Kat Font (.kf)\0*.KF\0";
+	    s_file.nFilterIndex = 1;
+
+	    if(GetSaveFileNameA(&s_file))
+	    {
+		SetWindowTextA(select_save_window, s_file.lpstrFile);
+		// CopyMemory(save_file, save_file.lpstrFile, save_file.nMaxFile);
+	    }
+	}break;
+	}
+    }break;
     }
     return(DefWindowProcA(window, message, wparam, lparam));
 }
-
+    
 s32 WINAPI
 WinMain (HINSTANCE instance,
 	 HINSTANCE prev_instance,
 	 LPSTR     lpCmdLine,
 	 s32       nShowCmd)
 {
-    // atlas.exe [font-path], [font-name]
-    //
-    // 72.0 pt ( 96 px)
-    // 64.8 pt (~86 px)
-    // 57.6 pt (~77 px)
-    // 50.4 pt (~67 px)
-    // 43.2 pt (~58 px)
-    // 36.0 pt ( 48 px)
-    // 28.8 pt (~38 px)
-    // 21.6 pt (~29 px)
-    // 14.4 pt (~19 px)
-    // 07.2 pt (~10 px)
-    //
-
+    // Atlas Baked
     
-    window_width = 1280;
-    window_height = 720;
+    SetProcessDpiAwareness(PROCESS_PER_MONITOR_DPI_AWARE);
+    u32 DPI = GetDpiForSystem();
+
+    // Atlas Baked
 
     WNDCLASSA window_class = {};
     window_class.style 	       = CS_OWNDC | CS_HREDRAW | CS_VREDRAW;
-    window_class.lpfnWndProc   = windows_messageproc;
+    window_class.lpfnWndProc   = windows_procedure_message;
     window_class.hInstance     = instance;
     window_class.hCursor       = LoadCursorA(0, IDC_ARROW);
-    window_class.lpszClassName = "Atlas Shrugged";
+    window_class.lpszClassName = "Atlas Baked";
 
     if(RegisterClassA(&window_class))
     {
-	SetProcessDpiAwareness(PROCESS_PER_MONITOR_DPI_AWARE);
-
-	s32 monitor_width  = GetSystemMetrics(SM_CXSCREEN);
-	s32 monitor_height = GetSystemMetrics(SM_CYSCREEN);
-	
-	// resize the window.
-	
-	window_width  = 1280;
-	window_height = 720;
-
 	RECT window_rect = {
-	    (monitor_width  - window_width )/2,
-	    (monitor_height - window_height)/2,
-	    window_width  + window_rect.left  ,
-	    window_height + window_rect.top   ,
+	    (GetSystemMetrics(SM_CXSCREEN) - window_width )/2,
+	    (GetSystemMetrics(SM_CYSCREEN) - window_height)/2,
+	    window_width  + window_rect.left,
+	    window_height + window_rect.top,
 	};
 	
 	if(!AdjustWindowRect(&window_rect, WS_SYSMENU | WS_MINIMIZEBOX | WS_CAPTION, false)) {
 	    OutputDebugStringA("'AdjustWindowRect' failed!\n");
 	}
-	
+
 	HWND window = CreateWindowA(window_class.lpszClassName,
 				    window_class.lpszClassName,
 				    WS_VISIBLE | WS_SYSMENU | WS_MINIMIZEBOX | WS_CAPTION,
@@ -686,119 +782,29 @@ WinMain (HINSTANCE instance,
 				    0, 0,
 				    instance,
 				    0);
-
+	
 	if(window)
 	{
 	    running = true;
 
-	    HDC window_dc = GetDC(window);
-	    if(windows_opengl_initialise(window_dc))
+	    while(running)
 	    {
-		windows_opengl_updateviewport(window_width, window_height);
-
-
-		//
-		// GRAPHICS INITIALISE
-		//
-    
-		render_information_primitive primitive = {};
-		graphics_primitives_initialise(&primitive);
-    
-		//
-		// LOAD DEFAULT
-		//
-		io_file file = io_readfile("/data/Fontin_29.font");
-		if(file.source)
+		MSG message = {};
+		while(PeekMessageA(&message, window, 0, 0, PM_REMOVE))
 		{
-		    font_atlas* header = (font_atlas*)file.source;
-		    s8* source = (s8*)header + header->byte_offset;
-		    s8* glyphs = (s8*)header + header->glyph_offset;
-
-		    graphics_primitive_set_font_colour(&primitive.font, 1.0, 1.0, 1.0, 1.0);
-		    graphics_primitive_set_font_texture(&primitive.font, opengl_texture_compile(source, header->width, header->height));
-		    graphics_primitive_set_font_linespacing(&primitive.font, header->line_spacing);
-		    for(s32 g = 0; g < header->count; g++)
-		    {
-			graphics_primitive_set_font_glyph(&primitive.font, ((glyph*)glyphs)[g].ascii,
-							  ((glyph*)glyphs)[g].width, ((glyph*)glyphs)[g].height,
-							  ((glyph*)glyphs)[g].offset,
-							  ((glyph*)glyphs)[g].spacing,((glyph*)glyphs)[g].pre_spacing,
-							  ((glyph*)glyphs)[g].u0, ((glyph*)glyphs)[g].v0, ((glyph*)glyphs)[g].u1, ((glyph*)glyphs)[g].v1);
-		    }
-		    io_freefile(file);
+		    TranslateMessage(&message);
+		    DispatchMessageA(&message);
 		}
-		else
-		{
-		    // CAN NOT START!
-		}
-    
-		//
-		// LOAD DEFAULT
-		//
 
-		
-		// @ memory
-		
-		// @ input
-		action_map  current_map = {};
-		action_map previous_map = {};
-
-		while(running)
-		{
-		    MSG message = {};
-		    while(PeekMessageA(&message, window, 0, 0, PM_REMOVE))
-		    {
-			TranslateMessage(&message);
-			DispatchMessageA(&message);
-		    }
-		    windows_actions_update(window, window_width, window_height, &current_map, &previous_map);
-
-		    if(current_map.actions[ACTION_ESC].pressed)
-		    {
-			running = false;
-		    }
-
-		    // do the thing.	    
-		    graphics_set_backgroundcolour(1.0, 0.0, 1.0, 1.0);
-
-		    //  graphics_primitive_set_colour(&primitive, 1.0, 0.0, 0.0, 1.0);
-		    //rect r = { 0.0, 0.0, 4.5, 4.5 };
-		    //graphics_primitive_render_rect(&primitive, r, 0);
-		    graphics_primitive_render_text(&primitive, "source .ttf:", sizeof("source .ttf:"), vec2(0.2, 0.2));
-		    graphics_primitive_render_text(&primitive, "output     :", sizeof("output     :"), vec2(0.2, 0.5));
-		    
-		    graphics_primitive_render_text(&primitive, "font size(s):", sizeof("font size(s):"), vec2(0.2, 1.0));
-		    
-		    graphics_primitive_render_text(&primitive, "07.2pt/~10px", sizeof("07.2pt/~10px"), vec2(0.2, 1.4));
-		    graphics_primitive_render_text(&primitive, "14.4pt/~19px", sizeof("14.4pt/~19px"), vec2(2.2, 1.4));
-		    graphics_primitive_render_text(&primitive, "21.6pt/~29px", sizeof("21.6pt/~29px"), vec2(4.4, 1.4));
-		    graphics_primitive_render_text(&primitive, "28.8pt/~38px", sizeof("28.8pt/~38px"), vec2(6.4, 1.4));
-		    graphics_primitive_render_text(&primitive, "36.0pt/ 48px", sizeof("36.0pt/ 48px"), vec2(8.4, 1.4));
-		    
-		    graphics_primitive_render_text(&primitive, "43.2pt/~58px", sizeof("43.2pt/~58px"), vec2(0.2, 3.4));
-		    graphics_primitive_render_text(&primitive, "50.4pt/~67px", sizeof("50.4pt/~67px"), vec2(2.2, 3.4));
-		    graphics_primitive_render_text(&primitive, "57.6pt/~77px", sizeof("57.6pt/~77px"), vec2(4.4, 3.4));
-		    graphics_primitive_render_text(&primitive, "64.8pt/~86px", sizeof("64.8pt/~86px"), vec2(6.4, 3.4));
-		    graphics_primitive_render_text(&primitive, "72.0pt/ 96px", sizeof("72.0pt/ 96px"), vec2(8.4, 3.4));
-
-
-		    SwapBuffers(window_dc);
-
-		    previous_map = current_map;
-		}
+		// here.
 	    }
-	    else
-	    {
-		OutputDebugStringA("'windows_opengl_initialise' failed!\n");
-	    }
-
+	    
 	    DestroyWindow(window);
 	}
 	else
 	{
 	    OutputDebugStringA("'CreateWindowA' failed!\n");
 	}
-
 	UnregisterClassA(window_class.lpszClassName, instance);
     }
     else
@@ -806,9 +812,5 @@ WinMain (HINSTANCE instance,
 	OutputDebugStringA("'RegisterClassA' failed!\n");
     }
 
-    
-
-    
-    
     return(0);
 }
