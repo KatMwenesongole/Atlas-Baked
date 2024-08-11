@@ -26,8 +26,6 @@
 //     Windows will scale the window to 750x750 (DWM scaling).
 //
 
-
-// MAX_PATH
 #include <windows.h>
 #include <shellscalingapi.h>
 
@@ -56,39 +54,24 @@ global u32 DPI;
 // bitmap.
 struct bitmap_header
 {
-    // can only load & save (A8 R8 G8 B8)
-    
     u16   signature; // must be 'BM' (0x4d42)
     u32   file_size;
     u16  reserved_0; // must be 0
     u16  reserved_1; // must be 0
     u32 byte_offset; // offset into the file the actual pixel array begins (must be 122)
 
-    u32 header_size; // must be 108
+    u32 header_size; // sizeof(BITMAPINFOHEADER)
     s32       width;  
     s32      height; // positive (bottom-up DIB)
-
-    // writes
+    
     u16 planes;              // must be 1
     u16 bits_per_pixel;      // must be 32    
-    u32 compression;         // must be BI_BITFIELDS)
+    u32 compression;         // must be BI_BITFIELDS
     u32 image_size;          // must be 0
-    u32 x_pixels_per_meter;  // must be 0 (no preference)
-    u32 y_pixels_per_meter;  // must be 0 (no preference)
+    s32 x_pixels_per_meter;  // must be 0 (no preference)
+    s32 y_pixels_per_meter;  // must be 0 (no preference)
     u32        used_colours; // must be 0
     u32 significant_colours; // must be 0
-    
-    u32   red_mask; // must be 0x00FF0000
-    u32 green_mask; // must be 0x0000FF00
-    u32  blue_mask; // must be 0x000000FF
-    u32 alpha_mask; // must be 0xFF000000
-
-    u32          colour_space;     // must be 0
-    CIEXYZTRIPLE colour_endpoints; // must be 0
-    
-    u32   red_tone; // must be 0
-    u32 green_tone; // must be 0
-    u32  blue_tone; // must be 0
 };
 // ttf.
 #define SWAPWORD(x) MAKEWORD(HIBYTE(x), LOBYTE(x))
@@ -128,7 +111,7 @@ struct ttf_name_header
 #define GLYPH_COUNT   233
 #define GLYPH_ROWS    16
 #define GLYPH_COLUMNS 16
-struct glyph
+struct glyph_header
 {
     s8   ascii;
     s32 offset;
@@ -144,7 +127,7 @@ struct glyph
     r32 v0;
     r32 v1;
 };
-struct font_atlas
+struct font_header
 {
     u32   size;
     u32  width;
@@ -157,9 +140,9 @@ struct font_atlas
     u32 line_spacing;
 
     u32 glyph_offset;
-    u32 byte_offset;
+    u32  byte_offset;
     
-    glyph glyphs[GLYPH_COUNT];
+    glyph_header glyphs[GLYPH_COUNT];
 };
 #pragma pack(pop)
 
@@ -172,18 +155,19 @@ void font_preview_savebmp(s8* bmp,  u32 bmp_width,  u32 bmp_height,  u8* bmp_dat
     header.signature      = 0x4D42; 
     header.file_size      = sizeof(bitmap_header) + bmp_data_size;
     header.byte_offset    = sizeof(bitmap_header); 
-    header.header_size    = 108; 
+    header.header_size    = sizeof(BITMAPINFOHEADER); 
     header.width          = bmp_width;  
     header.height         = bmp_height; 
     header.planes         = 1;            
     header.bits_per_pixel = 32;      
-    header.compression    = BI_BITFIELDS;
-    header.red_mask       = 0x00FF0000;
-    header.green_mask     = 0x0000FF00;
-    header.blue_mask      = 0x000000FF;
-    header.alpha_mask     = 0xFF000000;
+    header.compression    = 0;
+    header.image_size     = bmp_width * bmp_height * 4;
+    // header.      red_mask = 0x00FF0000;
+    // header.    green_mask = 0x0000FF00;
+    // header.     blue_mask = 0x000000FF;
+    // header.    alpha_mask = 0xFF000000;
 
-    u8* save = (u8*)VirtualAlloc(0, header.file_size, MEM_COMMIT|MEM_RESERVE, PAGE_READWRITE);
+    u8* save = (u8*)VirtualAlloc(0, header.file_size, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
 
     CopyMemory((PVOID)save, (VOID*)&header, (SIZE_T)header.header_size);
     CopyMemory((PVOID)(save + header.byte_offset), (VOID*)bmp_data, (SIZE_T)bmp_data_size);
@@ -294,7 +278,8 @@ b32 ttf_fontfamily(s8* font_file, s8* font_family)
 }
 
 internal u32*
-bake_loadglyph(HFONT font, font_atlas* atlas, u32 size_px, s8 ascii, u32* glyph_width, u32* glyph_height,
+bake_loadglyph(HFONT font, font_header* atlas, u32 size_px, s8 ascii,
+	       u32* glyph_width, u32* glyph_height,
 	       s32* offset, s32* spacing, s32* pre_spacing)
 {
     HDC device_context = CreateCompatibleDC(GetDC(0));
@@ -375,7 +360,7 @@ bake_loadglyph(HFONT font, font_atlas* atlas, u32 size_px, s8 ascii, u32* glyph_
 
 		write_bitmap(bb_ptr, *glyph_width, *glyph_height, bb_width, glyph_memory, *glyph_width);
 	    }
-	    
+
 	    // vertical. 
 	    TEXTMETRICA metrics = {};
 	    GetTextMetricsA(device_context, &metrics);
@@ -406,7 +391,7 @@ bake_loadglyph(HFONT font, font_atlas* atlas, u32 size_px, s8 ascii, u32* glyph_
     return(0);
 }
 internal b32
-bake_loadfont(font_atlas* atlas, r32 points, s8* font_file, u32** glyphs)
+bake_loadfont(font_header* atlas, r32 points, s8* font_file, u32** glyphs)
 {
     b32 success = false;
 
@@ -464,14 +449,14 @@ bake_loadfont(font_atlas* atlas, r32 points, s8* font_file, u32** glyphs)
 		if((atlas->glyphs[g].width * atlas->glyphs[g].height) < (atlas->glyphs[h].width * atlas->glyphs[h].height))
 		{
 		    // swap.
-		    u32*  glyph_ptr  = glyphs[g];
-		    glyph glyph_info = atlas->glyphs[g];
+		    u32*  glyph_ptr = glyphs[g];
+		    glyph_header glyph_info = atlas->glyphs[g];
 
 		    CopyMemory(&glyphs[g], &glyphs[h], sizeof(u32*));
-		    CopyMemory(&atlas->glyphs[g], &atlas->glyphs[h], sizeof(glyph));
+		    CopyMemory(&atlas->glyphs[g], &atlas->glyphs[h], sizeof(glyph_header));
 
 		    CopyMemory(&glyphs[h], &glyph_ptr, sizeof(u32*));
-		    CopyMemory(&atlas->glyphs[h], &glyph_info, sizeof(glyph));
+		    CopyMemory(&atlas->glyphs[h], &glyph_info, sizeof(glyph_header));
 		    
 		    h = -1;
 		}
@@ -497,11 +482,11 @@ bake_loadfont(font_atlas* atlas, r32 points, s8* font_file, u32** glyphs)
     return(success);
 };
 internal void
-bake_clearglyphs(u32** glyphs)
+bake_clearglyph_headers(u32** glyph_headers)
 {
-    for(u32 glyph = 0; glyph < GLYPH_COUNT; glyph++)
+    for(u32 glyph_header = 0; glyph_header < GLYPH_COUNT; glyph_header++)
     {
-	VirtualFree(glyphs[glyph], 0 , MEM_RELEASE);
+	VirtualFree(glyph_headers[glyph_header], 0 , MEM_RELEASE);
     }
 }
 
@@ -554,7 +539,7 @@ packing_node* tree_insertnode(packing_tree* tree, packing_node* node, packing_in
     {
 	// leaf.
 
-	// is there a glyph here already?
+	// is there a glyph_header here already?
 	if(node->id) return(0); 
 	// is it too wide or tall?
 	if(info.width > node->rect.width() || info.height > node->rect.height()) return(0);
@@ -610,19 +595,19 @@ b32 bake_font()
     
     u32* glyphs[GLYPH_COUNT] = {};
 	 
-    font_atlas* atlas = (font_atlas*)VirtualAlloc(0, sizeof(font_atlas) + ((sqrt(current_px * current_px * GLYPH_COUNT)) * (sqrt(current_px * current_px * GLYPH_COUNT)) * 4), MEM_COMMIT, PAGE_READWRITE);
+    font_header* atlas = (font_header*)VirtualAlloc(0, sizeof(font_header) + ((sqrt(current_px * current_px * GLYPH_COUNT)) * (sqrt(current_px * current_px * GLYPH_COUNT)) * 4), MEM_COMMIT, PAGE_READWRITE);
 	
     atlas->glyph_width  = current_px;
     atlas->glyph_height = current_px;
-    // atlas->width        = atlas->glyph_width  * GLYPH_COLUMNS;
-    // atlas->height       = atlas->glyph_height * GLYPH_ROWS;
+    // atlas->width        = atlas->glyph_header_width  * GLYPH_HEADER_COLUMNS;
+    // atlas->height       = atlas->glyph_header_height * GLYPH_HEADER_ROWS;
 
     atlas->width        = sqrt(atlas->glyph_width * atlas->glyph_height * GLYPH_COUNT);
     atlas->height       = sqrt(atlas->glyph_width * atlas->glyph_height * GLYPH_COUNT);
-    atlas->size         = sizeof(font_atlas) + (atlas->width * atlas->height * 4);
+    atlas->size         = sizeof(font_header) + (atlas->width * atlas->height * 4);
     atlas->count        = GLYPH_COUNT;
     atlas->glyph_offset = 9 * sizeof(u32);
-    atlas->byte_offset  = sizeof(font_atlas);
+    atlas->byte_offset  = sizeof(font_header);
 
     io_file file = io_readfile(open_file);
     if(file.source)
@@ -648,34 +633,34 @@ b32 bake_font()
 	    u32 target_row    = g / GLYPH_COLUMNS;
 	    u32 target_column = g % GLYPH_COLUMNS;
 
-	    // the row height is equal to atlas->glyph_height.
+	    // the row height is equal to atlas->glyph_header_height.
 		
 	    // bytes contained in a single row =
-	    // atlas->glyph_height * atlas->width * 4
+	    // atlas->glyph_header_height * atlas->width * 4
 
-	    // bytes contained in a single glyph row =
-	    // atlas->glyph_width * 4
+	    // bytes contained in a single glyph_header row =
+	    // atlas->glyph_header_width * 4
 
-	    // glyph beginning row =
-	    // (target_row * 'bytes contained in a single row') + (target_column * 'bytes contained in a single glyph row')
+	    // glyph_header beginning row =
+	    // (target_row * 'bytes contained in a single row') + (target_column * 'bytes contained in a single glyph_header row')
 
-	    // bytes contianed in a single glyph =
-	    // atlas->glyph_width * atlas->glyph_height * 4
+	    // bytes contianed in a single glyph_header =
+	    // atlas->glyph_header_width * atlas->glyph_header_height * 4
 
-	    // bytes contianed in entire glyph atlas =
-	    // 'bytes contianed in a single glyph' * GLYPH_ROWS * GLYPH_COLUMNS
+	    // bytes contianed in entire glyph_header atlas =
+	    // 'bytes contianed in a single glyph_header' * GLYPH_HEADER_ROWS * GLYPH_HEADER_COLUMNS
 
-	    // points to the first row of bytes where the glyph should be placed. (bottom-up)
+	    // points to the first row of bytes where the glyph_header should be placed. (bottom-up)
 	    // u8* target =
-	    // (glyph_data + (atlas->width * atlas->height * 4) - (atlas->width * atlas->glyph_height * 4))
+	    // (glyph_header_data + (atlas->width * atlas->height * 4) - (atlas->width * atlas->glyph_header_height * 4))
 	    // +
-	    // (atlas->glyph_width * 4 * target_column)
+	    // (atlas->glyph_header_width * 4 * target_column)
 	    // -
-	    // (atlas->width * atlas->glyph_height * 4 * target_row);
+	    // (atlas->width * atlas->glyph_header_height * 4 * target_row);
 
 	    u8* source = (u8*)(glyphs[g]);
 		
-	    //write_bitmap(source, atlas->glyphs[g].width, atlas->glyphs[g].height, atlas->glyphs[g].width, target, atlas->width);
+	    //write_bitmap(source, atlas->glyph_headers[g].width, atlas->glyph_headers[g].height, atlas->glyph_headers[g].width, target, atlas->width);
 
 	    packing_info info = {};
 	    info.id     = g + 1;
@@ -693,12 +678,12 @@ b32 bake_font()
 	}
 	
 	// uv.
-	// atlas->glyphs[g].u0 = (target_column * atlas->glyph_width)/(r32)atlas->width;
-	// atlas->glyphs[g].v0 = ((((GLYPH_ROWS - 1) - target_row) * atlas->glyph_height) + atlas->glyphs[g].height)/(r32)atlas->height;
-	// atlas->glyphs[g].u1 = ((target_column * atlas->glyph_width) + atlas->glyphs[g].width)/(r32)atlas->width;
-	// atlas->glyphs[g].v1 = (((GLYPH_ROWS - 1) - target_row) * atlas->glyph_height)/(r32)atlas->height;
+	// atlas->glyph_headers[g].u0 = (target_column * atlas->glyph_header_width)/(r32)atlas->width;
+	// atlas->glyph_headers[g].v0 = ((((GLYPH_HEADER_ROWS - 1) - target_row) * atlas->glyph_header_height) + atlas->glyph_headers[g].height)/(r32)atlas->height;
+	// atlas->glyph_headers[g].u1 = ((target_column * atlas->glyph_header_width) + atlas->glyph_headers[g].width)/(r32)atlas->width;
+	// atlas->glyph_headers[g].v1 = (((GLYPH_HEADER_ROWS - 1) - target_row) * atlas->glyph_header_height)/(r32)atlas->height;
 
-	bake_clearglyphs(glyphs);
+	bake_clearglyph_headers(glyphs);
 
 	// write font (.font)
 	io_writefile(save_file, atlas->size, atlas);
@@ -782,18 +767,13 @@ internal void windows_userinterface(HWND window)
     s32 create_width_button = 393;
     HWND button_create_window = CreateWindowA("button", "Bake", WS_CHILD | WS_VISIBLE| WS_BORDER,
 					      50 + create_width_button, 200, create_width_button, 40, window, (HMENU)BAKE_BUTTON, 0, 0);
-    SendMessageA(button_create_window, WM_SETFONT, (WPARAM)font, TRUE); 
+    SendMessageA(button_create_window, WM_SETFONT, (WPARAM)font, TRUE);
 
-    // s32 preview_width_static = file_width_static;
-    // HWND static_preview_window = CreateWindowA("static", "Preview:", WS_CHILD | WS_VISIBLE | SS_CENTER,
-    // 					       50, 250,
-    // 					       preview_width_static, 30, window, 0, 0, 0);
-    // SendMessageA(static_preview_window, WM_SETFONT, (WPARAM)font, TRUE);
-
-    // HWND image_preview_window = CreateWindowA("static", "Preview:", WS_CHILD | WS_VISIBLE | SS_BITMAP,
-    // 					       50, 250,
-    // 					       preview_width_static, 30, window, 0, 0, 0);
+    io_file file0 = io_readfile("a:/test/DMMono_test.bmp");
+    io_file file1 = io_readfile("a:/test/DMMono_36.bmp");
+    
 }
+
 LRESULT WINAPI windows_procedure_message(HWND window, UINT message, WPARAM wparam, LPARAM lparam)
 {
     switch(message)
@@ -817,7 +797,7 @@ LRESULT WINAPI windows_procedure_message(HWND window, UINT message, WPARAM wpara
 	    o_file.hwndOwner    = window;
 	    o_file.lpstrFile    = open_file;
 	    o_file.lpstrFile[0] = '\0';
-	    o_file.nMaxFile     = 256;
+	    o_file.nMaxFile     = MAX_PATH;
 	    o_file.lpstrFilter  = "Truetype Fonts (.ttf)\0*.TTF\0";
 	    o_file.nFilterIndex = 1;
 
@@ -833,8 +813,8 @@ LRESULT WINAPI windows_procedure_message(HWND window, UINT message, WPARAM wpara
 	    s_file.hwndOwner    = window;
 	    s_file.lpstrFile    = save_file;
 	    s_file.lpstrFile[0] = '\0';
-	    s_file.nMaxFile     = 256;
-	    s_file.lpstrFilter  = "Font (.font)\0*.font\0";
+	    s_file.nMaxFile     = MAX_PATH;
+	    s_file.lpstrFilter  = "Font (.font)\0*.FONT\0";
 	    s_file.nFilterIndex = 1;
 
 	    if(GetSaveFileNameA(&s_file))
@@ -851,35 +831,31 @@ LRESULT WINAPI windows_procedure_message(HWND window, UINT message, WPARAM wpara
 	    // bitmap.
 	    mem_copy(save_file, bitmap_file, MAX_PATH);
 	    s32 len = strlen(bitmap_file);
-	    bitmap_file[len - 1] = '\0';
-	    bitmap_file[len - 2] = 'p';
-	    bitmap_file[len - 3] = 'm';
-	    bitmap_file[len - 4] = 'b';
+	    if(len > 4)
+	    {
+		bitmap_file[len - 1] = '\0';
+		bitmap_file[len - 2] = 'p';
+		bitmap_file[len - 3] = 'm';
+		bitmap_file[len - 4] = 'b';
+	    }
 	    
 	    if(bake_font())
 	    {
 		// message box - success!
 		MessageBoxA(window, "success!", "Status", MB_OK);
 
-		// show preview image!
-		HWND bitmap_window = CreateWindowA("static", 0, WS_CHILD | WS_VISIBLE | SS_BITMAP,
-     					       50, 250,
-     					       200, 200, window, 0, 0, 0);
-		HBITMAP bitmap = (HBITMAP)LoadImageA(0, bitmap_file, IMAGE_BITMAP, 200, 200, LR_LOADFROMFILE);
-
-		DWORD error = GetLastError();
-		
+		// preview!
+		HWND bitmap_window = CreateWindowA("static", 0, WS_CHILD | WS_VISIBLE | SS_BITMAP | WS_BORDER,
+						   450, 290,
+						   380, 380, window, 0, 0, 0);
+		HBITMAP bitmap = (HBITMAP)LoadImageA(0, bitmap_file, IMAGE_BITMAP, 380, 380, LR_LOADFROMFILE | LR_MONOCHROME);
 		SendMessageA(bitmap_window, STM_SETIMAGE, IMAGE_BITMAP, (LPARAM)bitmap);
-		
-							  
-		
-
-		
 	    }
 	    else
 	    {
-		MessageBoxA(window, "failed!", "Status", MB_OK | MB_ICONWARNING);
 		// message box - failed!
+		MessageBoxA(window, "failed!", "Status", MB_OK | MB_ICONWARNING);
+		
 	    }
 	}break;
 	}
