@@ -26,6 +26,8 @@
 //     Windows will scale the window to 750x750 (DWM scaling).
 //
 
+
+// MAX_PATH
 #include <windows.h>
 #include <shellscalingapi.h>
 
@@ -41,19 +43,20 @@ global b32 running;
 global s32 window_width  = 1280;
 global s32 window_height = 720;
 
-global s8 open_file[256] = { };
-global s8 save_file[256] = { };
+global s8   open_file[256] = { 'C', ':', '/'};
+global s8   save_file[256] = { 'C', ':', '/'};
+global s8 bitmap_file[256] = { };
 
-//
-// combine line spacing and max glyph height?
-//
-//
+global s8 height_field[256] = { '7', '2' };
 
-// preview only.
+global u32 DPI;
+
 #pragma pack(push, 1)
-struct font_preview_bitmapheader
+
+// bitmap.
+struct bitmap_header
 {
-    // note: can only load & save (A8 R8 G8 B8)
+    // can only load & save (A8 R8 G8 B8)
     
     u16   signature; // must be 'BM' (0x4d42)
     u32   file_size;
@@ -65,7 +68,7 @@ struct font_preview_bitmapheader
     s32       width;  
     s32      height; // positive (bottom-up DIB)
 
-    // note: writes
+    // writes
     u16 planes;              // must be 1
     u16 bits_per_pixel;      // must be 32    
     u32 compression;         // must be BI_BITFIELDS)
@@ -87,75 +90,44 @@ struct font_preview_bitmapheader
     u32 green_tone; // must be 0
     u32  blue_tone; // must be 0
 };
-#pragma pack(pop)
-
-void font_preview_savebmp(s8* bmp,  u32 bmp_width,  u32 bmp_height,  u8* bmp_data)
+// ttf.
+#define SWAPWORD(x) MAKEWORD(HIBYTE(x), LOBYTE(x))
+#define SWAPLONG(x) MAKELONG(SWAPWORD(HIWORD(x)), SWAPWORD(LOWORD(x)))
+struct ttf_offsettable_header
 {
-    u32 bmp_data_size = bmp_width * bmp_height * 4;
-
-    // (A8 R8 G8 B8)
-    font_preview_bitmapheader header = {};
-    header.signature      = 0x4D42; 
-    header.file_size      = sizeof(font_preview_bitmapheader) + bmp_data_size;
-    header.byte_offset    = sizeof(font_preview_bitmapheader); 
-    header.header_size    = 108; 
-    header.width          = bmp_width;  
-    header.height         = bmp_height; 
-    header.planes         = 1;            
-    header.bits_per_pixel = 32;      
-    header.compression    = BI_BITFIELDS;
-    header.red_mask       = 0x00FF0000;
-    header.green_mask     = 0x0000FF00;
-    header.blue_mask      = 0x000000FF;
-    header.alpha_mask     = 0xFF000000;
-
-    u8* save = (u8*)VirtualAlloc(0, header.file_size, MEM_COMMIT|MEM_RESERVE, PAGE_READWRITE);
-
-    CopyMemory((PVOID)save, (VOID*)&header, (SIZE_T)header.header_size);
-    CopyMemory((PVOID)(save + header.byte_offset), (VOID*)bmp_data, (SIZE_T)bmp_data_size);
-
-    io_writefile(bmp, header.file_size, save);
-
-    VirtualFree(save, 0, MEM_RELEASE);
-}
-
-// cmd. 
-internal void
-parse_commandline(s8* cmdline, s8* filename, s8* fontname)
+    u16 major_version;
+    u16 minor_version;
+    u16 num_of_tables;
+    u16 uSearchRange;
+    u16 uEntrySelector;
+    u16 uRangeShift;
+};
+struct ttf_directorytable_header
 {
-    u32 c = 0;
-    s8 chr = cmdline[c];
-    
-    while(chr != '\0')
-    {
-	while(chr != ',')
-	{
-	    filename[c] = chr;
-	    chr = cmdline[++c];
-	}
-	filename[c + 1] = '\0';
-	c += 2;
-	chr = cmdline[c];
-
-	u32 counter = 0;
-	while(chr != '\0')
-	{
-	    fontname[counter] = chr;
-	    chr = cmdline[++c];
-	    counter++;
-	}
-	fontname[c + 1] = '\0';
-	c += 2;
-	chr = cmdline[c];
-    }
-}
-
+    s8 table_name[4]; 
+    u32 checksum; 
+    u32 offset; 
+    u32 length; 
+};
+struct ttf_nametable_header
+{
+    u16 format_selector; // must be 0
+    u16 namerecords_count; 
+    u16 storage_offset;
+};
+struct ttf_name_header
+{
+    u16 platform_id;
+    u16 encoding_id;
+    u16 language_id;
+    u16 name_id;
+    u16 string_length;
+    u16 string_offset;
+};
 // font.
-#define GLYPH_COUNT   94
-#define GLYPH_ROWS    6
+#define GLYPH_COUNT   233
+#define GLYPH_ROWS    16
 #define GLYPH_COLUMNS 16
-
-#pragma pack(push, 1)
 struct glyph
 {
     s8   ascii;
@@ -191,6 +163,35 @@ struct font_atlas
 };
 #pragma pack(pop)
 
+void font_preview_savebmp(s8* bmp,  u32 bmp_width,  u32 bmp_height,  u8* bmp_data)
+{
+    u32 bmp_data_size = bmp_width * bmp_height * 4;
+
+    // (A8 R8 G8 B8)
+    bitmap_header header = {};
+    header.signature      = 0x4D42; 
+    header.file_size      = sizeof(bitmap_header) + bmp_data_size;
+    header.byte_offset    = sizeof(bitmap_header); 
+    header.header_size    = 108; 
+    header.width          = bmp_width;  
+    header.height         = bmp_height; 
+    header.planes         = 1;            
+    header.bits_per_pixel = 32;      
+    header.compression    = BI_BITFIELDS;
+    header.red_mask       = 0x00FF0000;
+    header.green_mask     = 0x0000FF00;
+    header.blue_mask      = 0x000000FF;
+    header.alpha_mask     = 0xFF000000;
+
+    u8* save = (u8*)VirtualAlloc(0, header.file_size, MEM_COMMIT|MEM_RESERVE, PAGE_READWRITE);
+
+    CopyMemory((PVOID)save, (VOID*)&header, (SIZE_T)header.header_size);
+    CopyMemory((PVOID)(save + header.byte_offset), (VOID*)bmp_data, (SIZE_T)bmp_data_size);
+
+    io_writefile(bmp, header.file_size, save);
+
+    VirtualFree(save, 0, MEM_RELEASE);
+}
 internal void
 write_bitmap(void* source, u32 source_size_x, u32 source_size_y, u32 source_width,
 	     void* target, u32 target_width)
@@ -203,9 +204,98 @@ write_bitmap(void* source, u32 source_size_x, u32 source_size_y, u32 source_widt
     }
 }
 
+// cmd. 
+internal void
+parse_commandline(s8* cmdline, s8* filename, s8* fontname)
+{
+    u32 c = 0;
+    s8 chr = cmdline[c];
+    
+    while(chr != '\0')
+    {
+	while(chr != ',')
+	{
+	    filename[c] = chr;
+	    chr = cmdline[++c];
+	}
+	filename[c + 1] = '\0';
+	c += 2;
+	chr = cmdline[c];
+
+	u32 counter = 0;
+	while(chr != '\0')
+	{
+	    fontname[counter] = chr;
+	    chr = cmdline[++c];
+	    counter++;
+	}
+	fontname[c + 1] = '\0';
+	c += 2;
+	chr = cmdline[c];
+    }
+}
+
+// ttf.
+b32 ttf_fontfamily(s8* font_file, s8* font_family)
+{
+    io_file font = io_readfile(font_file);
+    if(font.source)
+    {
+	ttf_offsettable_header* offset_table = (ttf_offsettable_header*)font.source;
+	offset_table->num_of_tables = SWAPWORD(offset_table->num_of_tables);
+
+	b32 table_found = false;
+
+	ttf_directorytable_header* directory_table =
+	(ttf_directorytable_header*)((s8*)font.source + sizeof(ttf_offsettable_header));
+	for(s32 table = 0; table < offset_table->num_of_tables; table++)
+	{
+	    if(directory_table->table_name[0] == 'n' &&
+	       directory_table->table_name[1] == 'a' &&
+	       directory_table->table_name[2] == 'm' &&
+	       directory_table->table_name[3] == 'e')
+	    {
+		table_found = true;
+		directory_table->length = SWAPLONG(directory_table->length);
+		directory_table->offset = SWAPLONG(directory_table->offset);
+		break;
+	    }
+	    directory_table++;
+	}
+
+	if(table_found)
+	{
+	    ttf_nametable_header* name_table = (ttf_nametable_header*)((s8*)font.source + directory_table->offset);
+
+	    name_table->namerecords_count = SWAPWORD(name_table->namerecords_count);
+	    name_table->storage_offset    = SWAPWORD(name_table->storage_offset);
+
+	    ttf_name_header* name_header = (ttf_name_header*)((s8*)name_table + sizeof(ttf_nametable_header));
+	    for(s32 record = 0; record < name_table->namerecords_count; record++)
+	    {
+		name_header->name_id = SWAPWORD(name_header->name_id);
+		if(name_header->name_id == 1) // font family
+		{
+		    name_header->string_length = SWAPWORD(name_header->string_length);
+		    name_header->string_offset = SWAPWORD(name_header->string_offset);
+
+		    mem_copy((s8*)font.source + directory_table->offset + name_table->storage_offset + 
+			     name_header->string_offset + 1,
+			     font_family, name_header->string_length - 1);
+		    io_freefile(font);
+		    return(true);
+		}
+		name_header++;
+	    }
+	}
+	
+    }
+    return(false);
+}
+
 internal u32*
-windows_loadglyph(HFONT font, font_atlas* atlas, u32 size_px, s8 ascii, u32* glyph_width, u32* glyph_height,
-		  s32* offset, s32* spacing, s32* pre_spacing)
+bake_loadglyph(HFONT font, font_atlas* atlas, u32 size_px, s8 ascii, u32* glyph_width, u32* glyph_height,
+	       s32* offset, s32* spacing, s32* pre_spacing)
 {
     HDC device_context = CreateCompatibleDC(GetDC(0));
     
@@ -265,8 +355,8 @@ windows_loadglyph(HFONT font, font_atlas* atlas, u32 size_px, s8 ascii, u32* gly
 		bitmap_memory += (size_px * 2);
 	    }
 	    
-	    *glyph_width  = (max_column - min_column) + 1;
-	    *glyph_height = (max_row    - min_row   ) + 1;
+	    *glyph_width  = (max_column != 0) ? ((max_column - min_column) + 1) : 0;
+	    *glyph_height = (max_row    != 0) ? ((max_row    - min_row   ) + 1) : 0;
 
 	    *glyph_width  = (*glyph_width  > size_px) ? size_px : *glyph_width;
 	    *glyph_height = (*glyph_height > size_px) ? size_px : *glyph_height;
@@ -274,14 +364,17 @@ windows_loadglyph(HFONT font, font_atlas* atlas, u32 size_px, s8 ascii, u32* gly
 	    // smallest possible glyph.
 	    
 	    u32* glyph_memory = (u32*)VirtualAlloc(0, *glyph_width * *glyph_height * 4, MEM_COMMIT, PAGE_READWRITE);
-	    u32* glyph_ptr    = glyph_memory;
+	    if(glyph_memory)
+	    {
+		u32* glyph_ptr = glyph_memory;
 
-	    u32* bb_ptr = bb_memory;
-	    bb_ptr += (min_row * bb_width) + min_column;
+		u32* bb_ptr = bb_memory;
+		bb_ptr += (min_row * bb_width) + min_column;
 
-	    glyph_ptr = glyph_memory;
+		glyph_ptr = glyph_memory;
 
-	    write_bitmap(bb_ptr, *glyph_width, *glyph_height, bb_width, glyph_memory, *glyph_width);
+		write_bitmap(bb_ptr, *glyph_width, *glyph_height, bb_width, glyph_memory, *glyph_width);
+	    }
 	    
 	    // vertical. 
 	    TEXTMETRICA metrics = {};
@@ -313,13 +406,15 @@ windows_loadglyph(HFONT font, font_atlas* atlas, u32 size_px, s8 ascii, u32* gly
     return(0);
 }
 internal b32
-windows_loadfont(font_atlas* atlas, r32 size_pt, s8* font_file, s8* font_name, u32** glyphs)
+bake_loadfont(font_atlas* atlas, r32 points, s8* font_file, u32** glyphs)
 {
-    b32 success = true;
+    b32 success = false;
 
     AddFontResourceExA(font_file, FR_PRIVATE, 0);
+    s32 font_height = -MulDiv(points, GetDeviceCaps(GetDC(0), LOGPIXELSY), 72);
 
-    s32 font_height = -MulDiv(size_pt, GetDeviceCaps(GetDC(0), LOGPIXELSY), 72);
+    s8 font_family[256] = {};
+    ttf_fontfamily(font_file, font_family);
     
     HFONT font_handle = CreateFontA(font_height, 0, 0, 0,
 				    FW_NORMAL,   // weight
@@ -331,7 +426,7 @@ windows_loadfont(font_atlas* atlas, r32 size_pt, s8* font_file, s8* font_name, u
 				    CLIP_DEFAULT_PRECIS, 
 				    ANTIALIASED_QUALITY,
 				    DEFAULT_PITCH | FF_DONTCARE,
-				    font_name);
+				    font_family);
 
     if(font_handle)
     {
@@ -343,21 +438,20 @@ windows_loadfont(font_atlas* atlas, r32 size_pt, s8* font_file, s8* font_name, u
 
 	atlas->line_spacing = metrics.tmInternalLeading;
 
-	for(s8 i = 33; i < 127; i++) // '!'(33)   ->  '~'(126) 
+	for(s32 i = 32; i < 256; i++) // '!'(32) -> 'ÿ'(255) 
 	{
 	    atlas->glyphs[character_count].ascii = i;
-	    glyphs[character_count] = windows_loadglyph(font_handle, atlas, -font_height, i,
-							&atlas->glyphs[character_count].width,
-							&atlas->glyphs[character_count].height,
-							&atlas->glyphs[character_count].offset,
-							&atlas->glyphs[character_count].spacing,
-							&atlas->glyphs[character_count].pre_spacing);
+	    glyphs[character_count] = bake_loadglyph(font_handle, atlas, -font_height, i,
+						     &atlas->glyphs[character_count].width,
+						     &atlas->glyphs[character_count].height,
+						     &atlas->glyphs[character_count].offset,
+						     &atlas->glyphs[character_count].spacing,
+						     &atlas->glyphs[character_count].pre_spacing);
 	    
 	    if(atlas->glyphs[character_count].offset > max_offset) { max_offset = atlas->glyphs[character_count].offset; }
 
 	    character_count++;
 	}
-
 
 	// sort.
 
@@ -370,7 +464,6 @@ windows_loadfont(font_atlas* atlas, r32 size_pt, s8* font_file, s8* font_name, u
 		if((atlas->glyphs[g].width * atlas->glyphs[g].height) < (atlas->glyphs[h].width * atlas->glyphs[h].height))
 		{
 		    // swap.
-
 		    u32*  glyph_ptr  = glyphs[g];
 		    glyph glyph_info = atlas->glyphs[g];
 
@@ -385,12 +478,13 @@ windows_loadfont(font_atlas* atlas, r32 size_pt, s8* font_file, s8* font_name, u
 	    
 	    }
 	}
-             
 
-	for(u32 i = 0; i < 93; i++)
+	for(u32 i = 0; i < 233; i++)
 	{
 	    atlas->glyphs[i].offset = max_offset - atlas->glyphs[i].offset;
 	}
+
+	success = true;
     }
     else
     {
@@ -403,7 +497,7 @@ windows_loadfont(font_atlas* atlas, r32 size_pt, s8* font_file, s8* font_name, u
     return(success);
 };
 internal void
-windows_clearglyphs(u32** glyphs)
+bake_clearglyphs(u32** glyphs)
 {
     for(u32 glyph = 0; glyph < GLYPH_COUNT; glyph++)
     {
@@ -411,7 +505,7 @@ windows_clearglyphs(u32** glyphs)
     }
 }
 
-// packing
+// packing.
 struct packing_rect
 {
     s32 x0;
@@ -507,133 +601,129 @@ packing_node* tree_insertnode(packing_tree* tree, packing_node* node, packing_in
     }
 }
 
-/*
-  void function()
-  {
-  s8* filename = "a:/truetype/Fontin-Regular.ttf";
-  s8* fontname = "Fontin";
-
-  r32 current_pt = 72.0/(DPI/96);
-  u32 current_px = 96;
-  for(u32 atlas_count = 0; atlas_count < 10; atlas_count++)
-  {
-  u32* glyphs[GLYPH_COUNT] = {};
-	 
-  font_atlas* atlas = (font_atlas*)VirtualAlloc(0, sizeof(font_atlas) + ((sqrt(current_px * current_px * GLYPH_COUNT)) * (sqrt(current_px * current_px * GLYPH_COUNT)) * 4), MEM_COMMIT, PAGE_READWRITE);
-	
-  atlas->glyph_width  = current_px;
-  atlas->glyph_height = current_px;
-  // atlas->width        = atlas->glyph_width  * GLYPH_COLUMNS;
-  // atlas->height       = atlas->glyph_height * GLYPH_ROWS;
-
-  atlas->width        = sqrt(atlas->glyph_width * atlas->glyph_height * GLYPH_COUNT);
-  atlas->height       = sqrt(atlas->glyph_width * atlas->glyph_height * GLYPH_COUNT);
-	
-  atlas->size         = sizeof(font_atlas) + (atlas->width * atlas->height * 4);
-  atlas->count        = GLYPH_COUNT;
-  atlas->glyph_offset = 9 * sizeof(u32);
-  atlas->byte_offset  = sizeof(font_atlas);
-	
-  if(windows_loadfont(atlas, current_pt, filename, fontname, glyphs))
-  {
-  packing_tree tree = {};
-  tree.head = (packing_node*)VirtualAlloc(0, sizeof(packing_node) * GLYPH_COUNT * GLYPH_COUNT, MEM_COMMIT, PAGE_READWRITE);
-  tree.head->rect = {
-  0, 0, (s32)atlas->width, (s32)atlas->height
-  };
-
-  u8* glyph_data = (u8*)atlas + atlas->byte_offset;
-  for(s32 g = GLYPH_COUNT - 1; g > -1; g--)
-  {
-  u32 target_row    = g / GLYPH_COLUMNS;
-  u32 target_column = g % GLYPH_COLUMNS;
-
-  // the row height is equal to atlas->glyph_height.
-		
-  // bytes contained in a single row =
-  // atlas->glyph_height * atlas->width * 4
-
-  // bytes contained in a single glyph row =
-  // atlas->glyph_width * 4
-
-  // glyph beginning row =
-  // (target_row * 'bytes contained in a single row') + (target_column * 'bytes contained in a single glyph row')
-
-  // bytes contianed in a single glyph =
-  // atlas->glyph_width * atlas->glyph_height * 4
-
-  // bytes contianed in entire glyph atlas =
-  // 'bytes contianed in a single glyph' * GLYPH_ROWS * GLYPH_COLUMNS
-
-  // points to the first row of bytes where the glyph should be placed. (bottom-up)
-  // u8* target =
-  // (glyph_data + (atlas->width * atlas->height * 4) - (atlas->width * atlas->glyph_height * 4))
-  // +
-  // (atlas->glyph_width * 4 * target_column)
-  // -
-  // (atlas->width * atlas->glyph_height * 4 * target_row);
-
-  u8* source = (u8*)(glyphs[g]);
-		
-  //write_bitmap(source, atlas->glyphs[g].width, atlas->glyphs[g].height, atlas->glyphs[g].width, target, atlas->width);
-
-  packing_info info = {};
-  info.id     = g + 1;
-  info.width  = atlas->glyphs[g].width;
-  info.height = atlas->glyphs[g].height;
-		
-  packing_node* node = tree_insertnode(&tree, tree.head, info);
-  atlas->glyphs[g].u0 = node->rect.x0/(r32)atlas->width;
-  atlas->glyphs[g].v0 = node->rect.y1/(r32)atlas->height;
-  atlas->glyphs[g].u1 = node->rect.x1/(r32)atlas->width;
-  atlas->glyphs[g].v1 = node->rect.y0/(r32)atlas->height;
-		
-		
-  u8* target = glyph_data + (node->rect.y0 * atlas->width * 4) + (node->rect.x0 * 4);
-		
-  write_bitmap(source, atlas->glyphs[g].width, atlas->glyphs[g].height, atlas->glyphs[g].width, target, atlas->width);
-		
-
-  // uv.
-  // atlas->glyphs[g].u0 = (target_column * atlas->glyph_width)/(r32)atlas->width;
-  // atlas->glyphs[g].v0 = ((((GLYPH_ROWS - 1) - target_row) * atlas->glyph_height) + atlas->glyphs[g].height)/(r32)atlas->height;
-  // atlas->glyphs[g].u1 = ((target_column * atlas->glyph_width) + atlas->glyphs[g].width)/(r32)atlas->width;
-  // atlas->glyphs[g].v1 = (((GLYPH_ROWS - 1) - target_row) * atlas->glyph_height)/(r32)atlas->height;
-
-		
-  }
-	    
-  windows_clearglyphs(glyphs);
-
-  // write.
-  s8 file[MAX_PATH] = {};
-  sprintf(file, "a:/test/%s_%i.font", fontname, current_px);
-	
-  io_writefile(file, atlas->size, atlas);
-
-  // write preview image.
-  s8 preview_file[MAX_PATH] = {};
-  sprintf(preview_file, "a:/test/%s_%i.bmp", fontname, current_px);
-
-  font_preview_savebmp(preview_file, atlas->width, atlas->height, (u8*)atlas + atlas->byte_offset);
-
-  VirtualFree(tree.head, 0, MEM_RELEASE);
-  VirtualFree(atlas, 0, MEM_RELEASE);
-  }
-  else
-  {
-  OutputDebugStringA("'windows_loadfont' failed!\n");
-  }
-
-  current_pt = ((72.0/(DPI/96))/10.0) * (10 - (atlas_count + 1));
-  current_px = (96.0/10) * ((10 - (atlas_count + 1))) + 0.5;
-  }
+b32 bake_font()
+{
+    b32 success = false;
     
-  }
-*/
+    r32 current_pt = 72.0/(DPI/96);
+    u32 current_px = 96;
+    
+    u32* glyphs[GLYPH_COUNT] = {};
+	 
+    font_atlas* atlas = (font_atlas*)VirtualAlloc(0, sizeof(font_atlas) + ((sqrt(current_px * current_px * GLYPH_COUNT)) * (sqrt(current_px * current_px * GLYPH_COUNT)) * 4), MEM_COMMIT, PAGE_READWRITE);
+	
+    atlas->glyph_width  = current_px;
+    atlas->glyph_height = current_px;
+    // atlas->width        = atlas->glyph_width  * GLYPH_COLUMNS;
+    // atlas->height       = atlas->glyph_height * GLYPH_ROWS;
+
+    atlas->width        = sqrt(atlas->glyph_width * atlas->glyph_height * GLYPH_COUNT);
+    atlas->height       = sqrt(atlas->glyph_width * atlas->glyph_height * GLYPH_COUNT);
+    atlas->size         = sizeof(font_atlas) + (atlas->width * atlas->height * 4);
+    atlas->count        = GLYPH_COUNT;
+    atlas->glyph_offset = 9 * sizeof(u32);
+    atlas->byte_offset  = sizeof(font_atlas);
+
+    io_file file = io_readfile(open_file);
+    if(file.source)
+    {
+	io_freefile(file);
+    }
+    else
+    {
+	return(success);
+    }
+    
+    if(bake_loadfont(atlas, current_pt, open_file, glyphs))
+    {
+	packing_tree tree = {};
+	tree.head = (packing_node*)VirtualAlloc(0, sizeof(packing_node) * GLYPH_COUNT * GLYPH_COUNT, MEM_COMMIT, PAGE_READWRITE);
+	tree.head->rect = {
+	    0, 0, (s32)atlas->width, (s32)atlas->height
+	};
+
+	u8* glyph_data = (u8*)atlas + atlas->byte_offset;
+	for(s32 g = GLYPH_COUNT - 1; g > -1; g--)
+	{
+	    u32 target_row    = g / GLYPH_COLUMNS;
+	    u32 target_column = g % GLYPH_COLUMNS;
+
+	    // the row height is equal to atlas->glyph_height.
+		
+	    // bytes contained in a single row =
+	    // atlas->glyph_height * atlas->width * 4
+
+	    // bytes contained in a single glyph row =
+	    // atlas->glyph_width * 4
+
+	    // glyph beginning row =
+	    // (target_row * 'bytes contained in a single row') + (target_column * 'bytes contained in a single glyph row')
+
+	    // bytes contianed in a single glyph =
+	    // atlas->glyph_width * atlas->glyph_height * 4
+
+	    // bytes contianed in entire glyph atlas =
+	    // 'bytes contianed in a single glyph' * GLYPH_ROWS * GLYPH_COLUMNS
+
+	    // points to the first row of bytes where the glyph should be placed. (bottom-up)
+	    // u8* target =
+	    // (glyph_data + (atlas->width * atlas->height * 4) - (atlas->width * atlas->glyph_height * 4))
+	    // +
+	    // (atlas->glyph_width * 4 * target_column)
+	    // -
+	    // (atlas->width * atlas->glyph_height * 4 * target_row);
+
+	    u8* source = (u8*)(glyphs[g]);
+		
+	    //write_bitmap(source, atlas->glyphs[g].width, atlas->glyphs[g].height, atlas->glyphs[g].width, target, atlas->width);
+
+	    packing_info info = {};
+	    info.id     = g + 1;
+	    info.width  = atlas->glyphs[g].width;
+	    info.height = atlas->glyphs[g].height;
+		
+	    packing_node* node = tree_insertnode(&tree, tree.head, info);
+	    atlas->glyphs[g].u0 = node->rect.x0/(r32)atlas->width;
+	    atlas->glyphs[g].v0 = node->rect.y1/(r32)atlas->height;
+	    atlas->glyphs[g].u1 = node->rect.x1/(r32)atlas->width;
+	    atlas->glyphs[g].v1 = node->rect.y0/(r32)atlas->height;
+
+	    u8* target = glyph_data + (node->rect.y0 * atlas->width * 4) + (node->rect.x0 * 4);
+	    write_bitmap(source, atlas->glyphs[g].width, atlas->glyphs[g].height, atlas->glyphs[g].width, target, atlas->width);
+	}
+	
+	// uv.
+	// atlas->glyphs[g].u0 = (target_column * atlas->glyph_width)/(r32)atlas->width;
+	// atlas->glyphs[g].v0 = ((((GLYPH_ROWS - 1) - target_row) * atlas->glyph_height) + atlas->glyphs[g].height)/(r32)atlas->height;
+	// atlas->glyphs[g].u1 = ((target_column * atlas->glyph_width) + atlas->glyphs[g].width)/(r32)atlas->width;
+	// atlas->glyphs[g].v1 = (((GLYPH_ROWS - 1) - target_row) * atlas->glyph_height)/(r32)atlas->height;
+
+	bake_clearglyphs(glyphs);
+
+	// write font (.font)
+	io_writefile(save_file, atlas->size, atlas);
+	// write bitmap (.bmp)
+	font_preview_savebmp(bitmap_file, atlas->width, atlas->height, (u8*)atlas + atlas->byte_offset);
+
+	VirtualFree(tree.head, 0, MEM_RELEASE);
+	VirtualFree(atlas, 0, MEM_RELEASE);
+
+	success = true;
+    }
+    else
+    {
+	OutputDebugStringA("'windows_loadfont' failed!\n");
+    }
+	
+    
+    return(success);
+}
+
+// baking
 
 #define SELECT_OPEN_BUTTON 1
 #define SELECT_SAVE_BUTTON 2
+#define BAKE_BUTTON        3
 
 global HWND select_open_window = 0;
 global HWND select_save_window = 0;
@@ -679,7 +769,7 @@ internal void windows_userinterface(HWND window)
     HWND static0_height_window = CreateWindowA("static", "Font height:", WS_CHILD | WS_VISIBLE | SS_CENTER,
 					       50, 150,
 					       size_width_static0, 40, window, 0, 0, 0);
-    HWND field_height_window = CreateWindowA("edit", "72", WS_CHILD | WS_VISIBLE | WS_BORDER,
+    HWND field_height_window = CreateWindowA("edit", height_field, WS_CHILD | WS_VISIBLE | WS_BORDER,
 					     50 + size_width_static0 + 10, 150,
 					     size_width_edit, 40, window, 0, 0, 0);
     HWND static1_height_window = CreateWindowA("static", "pt", WS_CHILD | WS_VISIBLE,
@@ -691,16 +781,18 @@ internal void windows_userinterface(HWND window)
     
     s32 create_width_button = 393;
     HWND button_create_window = CreateWindowA("button", "Bake", WS_CHILD | WS_VISIBLE| WS_BORDER,
-					      50 + create_width_button, 200, create_width_button, 40, window, 0, 0, 0);
+					      50 + create_width_button, 200, create_width_button, 40, window, (HMENU)BAKE_BUTTON, 0, 0);
     SendMessageA(button_create_window, WM_SETFONT, (WPARAM)font, TRUE); 
 
-    s32 preview_width_static = file_width_static;
-    HWND static_preview_window = CreateWindowA("static", "Preview:", WS_CHILD | WS_VISIBLE | SS_CENTER,
-		  50, 250,
-		  preview_width_static, 30, window, 0, 0, 0);
-    SendMessageA(static_preview_window, WM_SETFONT, (WPARAM)font, TRUE); 
+    // s32 preview_width_static = file_width_static;
+    // HWND static_preview_window = CreateWindowA("static", "Preview:", WS_CHILD | WS_VISIBLE | SS_CENTER,
+    // 					       50, 250,
+    // 					       preview_width_static, 30, window, 0, 0, 0);
+    // SendMessageA(static_preview_window, WM_SETFONT, (WPARAM)font, TRUE);
 
-    
+    // HWND image_preview_window = CreateWindowA("static", "Preview:", WS_CHILD | WS_VISIBLE | SS_BITMAP,
+    // 					       50, 250,
+    // 					       preview_width_static, 30, window, 0, 0, 0);
 }
 LRESULT WINAPI windows_procedure_message(HWND window, UINT message, WPARAM wparam, LPARAM lparam)
 {
@@ -732,7 +824,6 @@ LRESULT WINAPI windows_procedure_message(HWND window, UINT message, WPARAM wpara
 	    if(GetOpenFileNameA(&o_file))
 	    {
 		SetWindowTextA(select_open_window, o_file.lpstrFile);
-		// CopyMemory(ttf_file, open_file.lpstrFile, open_file.nMaxFile);
 	    }
 	}break;
 	case SELECT_SAVE_BUTTON:
@@ -743,13 +834,52 @@ LRESULT WINAPI windows_procedure_message(HWND window, UINT message, WPARAM wpara
 	    s_file.lpstrFile    = save_file;
 	    s_file.lpstrFile[0] = '\0';
 	    s_file.nMaxFile     = 256;
-	    s_file.lpstrFilter  = "Font (.font)\0*.KF\0";
+	    s_file.lpstrFilter  = "Font (.font)\0*.font\0";
 	    s_file.nFilterIndex = 1;
 
 	    if(GetSaveFileNameA(&s_file))
 	    {
 		SetWindowTextA(select_save_window, s_file.lpstrFile);
-		// CopyMemory(save_file, save_file.lpstrFile, save_file.nMaxFile);
+	    }
+	}break;
+	case BAKE_BUTTON:
+	{
+	    GetWindowTextA(select_open_window, open_file, MAX_PATH);
+	    GetWindowTextA(select_save_window, save_file, MAX_PATH);
+	    // GetWindowTextA(); - font height
+
+	    // bitmap.
+	    mem_copy(save_file, bitmap_file, MAX_PATH);
+	    s32 len = strlen(bitmap_file);
+	    bitmap_file[len - 1] = '\0';
+	    bitmap_file[len - 2] = 'p';
+	    bitmap_file[len - 3] = 'm';
+	    bitmap_file[len - 4] = 'b';
+	    
+	    if(bake_font())
+	    {
+		// message box - success!
+		MessageBoxA(window, "success!", "Status", MB_OK);
+
+		// show preview image!
+		HWND bitmap_window = CreateWindowA("static", 0, WS_CHILD | WS_VISIBLE | SS_BITMAP,
+     					       50, 250,
+     					       200, 200, window, 0, 0, 0);
+		HBITMAP bitmap = (HBITMAP)LoadImageA(0, bitmap_file, IMAGE_BITMAP, 200, 200, LR_LOADFROMFILE);
+
+		DWORD error = GetLastError();
+		
+		SendMessageA(bitmap_window, STM_SETIMAGE, IMAGE_BITMAP, (LPARAM)bitmap);
+		
+							  
+		
+
+		
+	    }
+	    else
+	    {
+		MessageBoxA(window, "failed!", "Status", MB_OK | MB_ICONWARNING);
+		// message box - failed!
 	    }
 	}break;
 	}
@@ -767,7 +897,7 @@ WinMain (HINSTANCE instance,
     // Atlas Baked
     
     SetProcessDpiAwareness(PROCESS_PER_MONITOR_DPI_AWARE);
-    u32 DPI = GetDpiForSystem();
+    DPI = GetDpiForSystem();
 
     // Atlas Baked
 
