@@ -41,16 +41,15 @@ global b32 running;
 global s32 window_width  = 1280;
 global s32 window_height = 720;
 
-global s8   open_file[256] = { 'C', ':', '/'};
-global s8   save_file[256] = { 'C', ':', '/'};
-global s8 bitmap_file[256] = { };
+global s8   open_file[MAX_PATH] = { 'C', ':', '/'};
+global s8   save_file[MAX_PATH] = { 'C', ':', '/'};
+global s8 bitmap_file[MAX_PATH] = { };
 
-global s8 height_field[256] = { '7', '2' };
+global s8 height_field[3] = { '7', '2' };
 
 global u32 DPI;
 
 #pragma pack(push, 1)
-
 // bitmap.
 struct bitmap_header
 {
@@ -162,10 +161,6 @@ void font_preview_savebmp(s8* bmp,  u32 bmp_width,  u32 bmp_height,  u8* bmp_dat
     header.bits_per_pixel = 32;      
     header.compression    = 0;
     header.image_size     = bmp_width * bmp_height * 4;
-    // header.      red_mask = 0x00FF0000;
-    // header.    green_mask = 0x0000FF00;
-    // header.     blue_mask = 0x000000FF;
-    // header.    alpha_mask = 0xFF000000;
 
     u8* save = (u8*)VirtualAlloc(0, header.file_size, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
 
@@ -263,9 +258,19 @@ b32 ttf_fontfamily(s8* font_file, s8* font_family)
 		    name_header->string_length = SWAPWORD(name_header->string_length);
 		    name_header->string_offset = SWAPWORD(name_header->string_offset);
 
-		    mem_copy((s8*)font.source + directory_table->offset + name_table->storage_offset + 
-			     name_header->string_offset + 1,
-			     font_family, name_header->string_length - 1);
+		    // note, we can not to a simple 'mem_copy' as we require a null terminated string.
+		    //       it would appear the spaces between letters are '\0'
+
+		    s8* start = (s8*)font.source + directory_table->offset + name_table->storage_offset + 
+		    name_header->string_offset + 1;
+		    for(s32 c = 0; c < name_header->string_length - 1; c++)
+		    {
+			if(start[c] != '\0')
+			{
+			    *font_family++ = start[c];
+			}
+		    }
+		    
 		    io_freefile(font);
 		    return(true);
 		}
@@ -710,68 +715,104 @@ b32 bake_font()
 #define SELECT_SAVE_BUTTON 2
 #define BAKE_BUTTON        3
 
-global HWND select_open_window = 0;
-global HWND select_save_window = 0;
+global HWND window_truetype_field = 0;
+global HWND window_save_field = 0;
 
 internal void windows_userinterface(HWND window)
 {
+    // structure:
+    //
+    // pane [0] - settings
+    // pane [1] - preview
+    //
+    // window (1280, 720)
+    //
+    // pane [0] (0, 0, 640, 720)
+    // pane [1] (640, 0, 1280, 720)
+    //
+    // outer padding is 20px (left, top, right, bottom)
+    // inner padding is 10px
+    //
+    // controls:
+    //
+    // label  = static
+    // field  = edit
+    // button = button
+    //
+    //        20px          15%        5%        80%          20px
+    //  [outer padding ] [ label ] [ button ] [ field ] [outer padding]
+    //
+    
     HFONT font = CreateFontA(30, 0, 0, 0, FW_DONTCARE, FALSE, FALSE, FALSE, ANSI_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, DEFAULT_QUALITY, DEFAULT_PITCH | FF_SWISS, "Segoe UI");
+
+    s32 pane_width = window_width/2;
+    s32 outer_padding = 20;
+    s32 inner_padding = 10;
+    s32  line_padding = 50;
+
+    s32  label_width = ((r32)(pane_width - (outer_padding*2) - (inner_padding*2)))*0.30f;
+    s32 button_width = ((r32)(pane_width - (outer_padding*2) - (inner_padding*2)))*0.05f;
+    s32  field_width = ((r32)(pane_width - (outer_padding*2) - (inner_padding*2)))*0.65f;
+
+    s32 control_height = 40;
+
+    // truetype font.
+    HWND window_truetype_label = CreateWindowA("STATIC", "Truetype font:", WS_CHILD | WS_VISIBLE | SS_CENTER,
+					       outer_padding, outer_padding,
+					       label_width, control_height, window, 0, 0, 0);
     
-    s32 file_width_static = 174;
-    s32 file_width_button = 58;
-    s32 file_width_edit   = 928;
+    HWND window_truetype_button = CreateWindowA("BUTTON", "...", WS_CHILD | WS_VISIBLE | WS_BORDER,
+						outer_padding + label_width + inner_padding, outer_padding,
+						button_width, control_height, window, (HMENU)SELECT_OPEN_BUTTON, 0, 0);
     
-    HWND static_open_window = CreateWindowA("static", "Truetype font:", WS_CHILD | WS_VISIBLE | SS_CENTER,
-					    50, 50,
-					    file_width_static, 40, window, 0, 0, 0);
-    HWND button_open_window = CreateWindowA("button", "...", WS_CHILD | WS_VISIBLE | WS_BORDER,
-					    50 + file_width_static + 10, 50,
-					    file_width_button, 40, window, (HMENU)SELECT_OPEN_BUTTON, 0, 0);
-    select_open_window = CreateWindowA("edit", "C:/", WS_CHILD | WS_VISIBLE | WS_BORDER,
-				       50 + file_width_static + file_width_button + 20, 50,
-				       file_width_edit, 40, window, 0, 0, 0);
-    SendMessageA(static_open_window, WM_SETFONT, (WPARAM)font, TRUE); 
-    SendMessageA(button_open_window, WM_SETFONT, (WPARAM)font, TRUE);
-    SendMessageA(select_open_window, WM_SETFONT, (WPARAM)font, TRUE);
+    window_truetype_field = CreateWindowA("EDIT", "C:/", WS_CHILD | WS_VISIBLE | WS_BORDER | ES_AUTOHSCROLL,
+					  outer_padding + label_width + button_width + (inner_padding*2), outer_padding,
+					  field_width, control_height, window, 0, 0, 0);
+    
+    // save location.
+    HWND window_save_label = CreateWindowA("STATIC", "Save location:", WS_CHILD | WS_VISIBLE | SS_CENTER, 
+					   outer_padding, outer_padding + line_padding,
+					   label_width, control_height, window, 0, 0, 0);
+    
+    HWND window_save_button = CreateWindowA("BUTTON", "...", WS_CHILD | WS_VISIBLE | WS_BORDER,
+					    outer_padding + label_width + inner_padding, outer_padding + line_padding,
+					    button_width, control_height, window, (HMENU)SELECT_SAVE_BUTTON, 0, 0);
+    
+    window_save_field = CreateWindowA("EDIT", "C:/", WS_CHILD | WS_VISIBLE | WS_BORDER | ES_AUTOHSCROLL,
+				      outer_padding + label_width + button_width + (inner_padding*2), outer_padding + line_padding,
+				      field_width, control_height, window, 0, 0, 0);
+
+
+    // font height.
+    HWND window_fontheight_label0 = CreateWindowA("STATIC", "Font height:", WS_CHILD | WS_VISIBLE | SS_CENTER,
+						  outer_padding, outer_padding + (line_padding*2),
+						  label_width, control_height, window, 0, 0, 0);
+
+    // no more than three characters! how can we make sure of this?
+    HWND window_fontheight_field = CreateWindowA("EDIT", height_field, WS_CHILD | WS_VISIBLE | WS_BORDER | ES_NUMBER | ES_CENTER,
+						 outer_padding + label_width + inner_padding, outer_padding + (line_padding*2),
+						 (field_width*0.1), control_height, window, 0, 0, 0);
+    
+    HWND window_fontheight_label1 = CreateWindowA("STATIC", "pt", WS_CHILD | WS_VISIBLE | SS_CENTER,
+						  outer_padding + label_width + (field_width*0.1) + (inner_padding*2), outer_padding + (line_padding*2),
+					          (label_width*0.15), control_height, window, 0, 0, 0);
+
+    // bake.
+    HWND window_bake_button = CreateWindowA("BUTTON", "Bake", WS_CHILD | WS_VISIBLE| WS_BORDER,
+					    outer_padding, outer_padding + (line_padding*3), pane_width - (outer_padding*2), control_height, window, (HMENU)BAKE_BUTTON, 0, 0);
     
 
-    HWND static_save_window = CreateWindowA("static", "Save location:", WS_CHILD | WS_VISIBLE | SS_CENTER,
-					    50, 100,
-					    file_width_static, 40, window, 0, 0, 0);
-    HWND button_save_window = CreateWindowA("button", "...", WS_CHILD | WS_VISIBLE | WS_BORDER,
-					    50 + file_width_static + 10, 100,
-					    file_width_button, 40, window, (HMENU)SELECT_SAVE_BUTTON, 0, 0);
-    select_save_window = CreateWindowA("edit", "C:/", WS_CHILD | WS_VISIBLE | WS_BORDER,
-				       50 + file_width_static + file_width_button + 20, 100,
-				       file_width_edit, 40, window, 0, 0, 0);
-    SendMessageA(static_save_window, WM_SETFONT, (WPARAM)font, TRUE); 
-    SendMessageA(button_save_window, WM_SETFONT, (WPARAM)font, TRUE);
-    SendMessageA(select_save_window, WM_SETFONT, (WPARAM)font, TRUE); 
-    
-    s32 size_width_static0 = file_width_static;
-    s32 size_width_static1 = 20;
-    s32 size_width_edit    = 100;
-    HWND static0_height_window = CreateWindowA("static", "Font height:", WS_CHILD | WS_VISIBLE | SS_CENTER,
-					       50, 150,
-					       size_width_static0, 40, window, 0, 0, 0);
-    HWND field_height_window = CreateWindowA("edit", height_field, WS_CHILD | WS_VISIBLE | WS_BORDER,
-					     50 + size_width_static0 + 10, 150,
-					     size_width_edit, 40, window, 0, 0, 0);
-    HWND static1_height_window = CreateWindowA("static", "pt", WS_CHILD | WS_VISIBLE,
-					       50 + size_width_static0 + size_width_edit + 20, 150,
-					       size_width_static1, 40, window, 0, 0, 0);
-    SendMessageA(static0_height_window, WM_SETFONT, (WPARAM)font, TRUE); 
-    SendMessageA(field_height_window, WM_SETFONT, (WPARAM)font, TRUE);
-    SendMessageA(static1_height_window, WM_SETFONT, (WPARAM)font, TRUE); 
-    
-    s32 create_width_button = 393;
-    HWND button_create_window = CreateWindowA("button", "Bake", WS_CHILD | WS_VISIBLE| WS_BORDER,
-					      50 + create_width_button, 200, create_width_button, 40, window, (HMENU)BAKE_BUTTON, 0, 0);
-    SendMessageA(button_create_window, WM_SETFONT, (WPARAM)font, TRUE);
-
-    io_file file0 = io_readfile("a:/test/DMMono_test.bmp");
-    io_file file1 = io_readfile("a:/test/DMMono_36.bmp");
-    
+    //  send messages.
+    SendMessageA(window_truetype_label,    WM_SETFONT, (WPARAM)font, TRUE);
+    SendMessageA(window_truetype_button,   WM_SETFONT, (WPARAM)font, TRUE);
+    SendMessageA(window_truetype_field,    WM_SETFONT, (WPARAM)font, TRUE); 
+    SendMessageA(window_save_label,        WM_SETFONT, (WPARAM)font, TRUE);
+    SendMessageA(window_save_button,       WM_SETFONT, (WPARAM)font, TRUE);
+    SendMessageA(window_save_field,        WM_SETFONT, (WPARAM)font, TRUE); 
+    SendMessageA(window_fontheight_label0, WM_SETFONT, (WPARAM)font, TRUE);
+    SendMessageA(window_fontheight_label1, WM_SETFONT, (WPARAM)font, TRUE);
+    SendMessageA(window_fontheight_field,  WM_SETFONT, (WPARAM)font, TRUE);
+    SendMessageA(window_bake_button,       WM_SETFONT, (WPARAM)font, TRUE);
 }
 
 LRESULT WINAPI windows_procedure_message(HWND window, UINT message, WPARAM wparam, LPARAM lparam)
@@ -803,7 +844,7 @@ LRESULT WINAPI windows_procedure_message(HWND window, UINT message, WPARAM wpara
 
 	    if(GetOpenFileNameA(&o_file))
 	    {
-		SetWindowTextA(select_open_window, o_file.lpstrFile);
+		SetWindowTextA(window_truetype_field, o_file.lpstrFile);
 	    }
 	}break;
 	case SELECT_SAVE_BUTTON:
@@ -819,13 +860,13 @@ LRESULT WINAPI windows_procedure_message(HWND window, UINT message, WPARAM wpara
 
 	    if(GetSaveFileNameA(&s_file))
 	    {
-		SetWindowTextA(select_save_window, s_file.lpstrFile);
+		SetWindowTextA(window_save_field, s_file.lpstrFile);
 	    }
 	}break;
 	case BAKE_BUTTON:
 	{
-	    GetWindowTextA(select_open_window, open_file, MAX_PATH);
-	    GetWindowTextA(select_save_window, save_file, MAX_PATH);
+	    GetWindowTextA(window_truetype_field, open_file, MAX_PATH);
+	    GetWindowTextA(window_save_field, save_file, MAX_PATH);
 	    // GetWindowTextA(); - font height
 
 	    // bitmap.
@@ -842,19 +883,23 @@ LRESULT WINAPI windows_procedure_message(HWND window, UINT message, WPARAM wpara
 	    if(bake_font())
 	    {
 		// message box - success!
-		MessageBoxA(window, "success!", "Status", MB_OK);
+		MessageBoxA(window, "Success!", "Status", MB_OK);
+
+		s32 pane_width = window_width/2;
+		s32 outer_padding = 20;
 
 		// preview!
-		HWND bitmap_window = CreateWindowA("static", 0, WS_CHILD | WS_VISIBLE | SS_BITMAP | WS_BORDER,
-						   450, 290,
-						   380, 380, window, 0, 0, 0);
-		HBITMAP bitmap = (HBITMAP)LoadImageA(0, bitmap_file, IMAGE_BITMAP, 380, 380, LR_LOADFROMFILE | LR_MONOCHROME);
+		HWND bitmap_window = CreateWindowA("STATIC", 0, WS_CHILD | WS_VISIBLE | SS_BITMAP | WS_BORDER,
+						   outer_padding + pane_width, outer_padding,
+						   0, 0, window, 0, 0, 0);
+		
+		HBITMAP bitmap = (HBITMAP)LoadImageA(0, bitmap_file, IMAGE_BITMAP, pane_width - (outer_padding*2), pane_width - (outer_padding*2), LR_LOADFROMFILE | LR_MONOCHROME);
 		SendMessageA(bitmap_window, STM_SETIMAGE, IMAGE_BITMAP, (LPARAM)bitmap);
 	    }
 	    else
 	    {
 		// message box - failed!
-		MessageBoxA(window, "failed!", "Status", MB_OK | MB_ICONWARNING);
+		MessageBoxA(window, "Failed!", "Status", MB_OK | MB_ICONWARNING);
 		
 	    }
 	}break;
