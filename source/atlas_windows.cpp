@@ -19,12 +19,16 @@
 // 1 inch = 72 pt = 1 logical unit = 96 px (DPI, 100%)  = 1 DIP
 // 1 inch = 72 pt = 1 logical unit = 144 px (DPI, 150%) = 1.5 DIP
 //
+// to get the font size in pixels given points:
+// pixels = (points/72)*96*(DPI/100)
+// 
 // Windows peculiarities
 // Something to note about Windows 'SetProcessDpiAwareness()'.
 // If a program does not set its DPI awareness, then Windows scales the window (among other things) when the users DPI setting is not set to 100%.
 // e.g A DPI unaware program specifies a window size of 500x500 on a machine that has a DPI setting of 150%.
 //     Windows will scale the window to 750x750 (DWM scaling).
 //
+
 
 #include <windows.h>
 #include <shellscalingapi.h>
@@ -40,6 +44,8 @@
 global b32 running;
 global s32 window_width  = 1280;
 global s32 window_height = 720;
+
+global b32 cmd_mode;
 
 global s8   open_file[MAX_PATH] = { 'C', ':', '/'};
 global s8   save_file[MAX_PATH] = { 'C', ':', '/'};
@@ -287,88 +293,79 @@ bake_writeglyph(void* source, u32 source_size_x, u32 source_size_y, u32 source_w
 }
 internal u32*
 bake_loadglyph(HDC device_context, void* bytes,
-	       s32 size_px,
+	       s32 font_height, // in pixels.
 	       s32* offset,
 	       s32* glyph_width,
 	       s32* glyph_height)
 {
     ASSERT(bytes);
-   
-    u32* bitmap_memory = (u32*)bytes;
-
-    u32  bb_width  = size_px * 2;
-    u32  bb_height = size_px * 2;
-    u32* bb_memory = (u32*)VirtualAlloc(0, (bb_width * bb_height * 4), MEM_COMMIT, PAGE_READWRITE);
+    
+    u32  subsection_width  = font_height * 2;
+    u32  subsection_height = font_height * 2;
+    u32* subsection        = (u32*)VirtualAlloc(0, (subsection_width * subsection_height * 4), MEM_COMMIT, PAGE_READWRITE);
 
     // copy and calculate bounds.
-	    
     s32 max_column = 0;
-    s32 min_column = bb_width;
+    s32 min_column = subsection_width;
     s32 max_row    = 0;
-    s32 min_row    = bb_height;
+    s32 min_row    = subsection_height;
 
-    u32* ptr = bb_memory;
-    for(u32 by = 0; by < bb_height; by++)  
+    u32* dib_memory = (u32*)bytes;
+    u32* ptr = subsection;
+    for(s32 y = 0; y < subsection_height; y++)  
     {
-	u32* bmp = bitmap_memory;
-	for(u32 bx = 0; bx < bb_width; bx++) 
+	u32* px = dib_memory;
+	for(u32 x = 0; x < subsection_width; x++) 
 	{
-	    u8 a = *bmp++ & 0xff; 
+	    u8 a = *px++ & 0xff; 
 	    if(a)
 	    {
-		if(bx < min_column) min_column = bx;
-		if(bx > max_column) max_column = bx;
-		if(by < min_row)    min_row    = by;
-		if(by > max_row)    max_row    = by;
+		if(x < min_column) min_column = x;
+		if(x > max_column) max_column = x;
+		if(y < min_row)    min_row    = y;
+		if(y > max_row)    max_row    = y;
 	    }
 	    *ptr++ = a | (a << 8) | (a << 16) | (a << 24);
 	}
-	bitmap_memory += (size_px * 2);
+	dib_memory += (font_height * 2);
     }
 	    
     *glyph_width  = (max_column != 0) ? ((max_column - min_column) + 1) : 0;
     *glyph_height = (max_row    != 0) ? ((max_row    - min_row   ) + 1) : 0;
 
-    *glyph_width  = (*glyph_width  > size_px) ? size_px : *glyph_width;
-    *glyph_height = (*glyph_height > size_px) ? size_px : *glyph_height;
+    *glyph_width  = (*glyph_width  > font_height) ? font_height : *glyph_width;
+    *glyph_height = (*glyph_height > font_height) ? font_height : *glyph_height;
 
     // smallest possible glyph.
-	    
-    u32* glyph_memory = (u32*)VirtualAlloc(0, *glyph_width * *glyph_height * 4, MEM_COMMIT, PAGE_READWRITE);
-    if(glyph_memory)
+    u32* glyph = (u32*)VirtualAlloc(0, *glyph_width * *glyph_height * 4, MEM_COMMIT, PAGE_READWRITE);
+    if(glyph)
     {
-	u32* glyph_ptr = glyph_memory;
+	u32* subsection_ptr = subsection;
+	subsection_ptr += (min_row * subsection_width) + min_column;
 
-	u32* bb_ptr = bb_memory;
-	bb_ptr += (min_row * bb_width) + min_column;
-
-	glyph_ptr = glyph_memory;
-
-	bake_writeglyph(bb_ptr, *glyph_width, *glyph_height, bb_width, glyph_memory, *glyph_width);
+	bake_writeglyph(subsection_ptr, *glyph_width, *glyph_height, subsection_width, glyph, *glyph_width);
+	
+	VirtualFree(subsection, 0, MEM_RELEASE);
     }
+    // free happens later.
 
-    // vertical. 
     TEXTMETRICA metrics = {};
     GetTextMetricsA(device_context, &metrics);
-    *offset = max_row - (bb_height - metrics.tmAscent);
+    *offset = max_row - (subsection_height - metrics.tmAscent);
 
-    // clean.
-    VirtualFree(bb_memory, 0, MEM_RELEASE);
-
-    return((u32*)glyph_memory); 
+    return((u32*)glyph); 
 }
 internal b32
-bake_loadfont(font_header* atlas, r32 points, s8* font_file, u32** glyphs)
+bake_loadfont(font_header* atlas, r32 points, s32 pixels, s8* font_file, u32** glyphs)
 {
     b32 success = false;
 
     AddFontResourceExA(font_file, FR_PRIVATE, 0);
-    s32 font_height = -MulDiv(points, GetDeviceCaps(GetDC(0), LOGPIXELSY), 72);
 
     s8 font_family[256] = {};
     ttf_fontfamily(font_file, font_family);
-    
-    HFONT font_handle = CreateFontA(font_height, 0, 0, 0,
+
+    HFONT font_handle = CreateFontA(-MulDiv(points, GetDeviceCaps(GetDC(0), LOGPIXELSY), 72), 0, 0, 0,
 				    FW_NORMAL,   // weight
 				    FALSE,       // italic
 				    FALSE,       // underline
@@ -386,10 +383,12 @@ bake_loadfont(font_header* atlas, r32 points, s8* font_file, u32** glyphs)
 
 	if(device_context)
 	{
+	    SetMapMode(device_context, MM_TEXT);
+	    
 	    BITMAPINFO bitmap_info              = {};
 	    bitmap_info.bmiHeader.biSize        =  sizeof(bitmap_info.bmiHeader);
-	    bitmap_info.bmiHeader.biWidth       =  -font_height * 2;
-	    bitmap_info.bmiHeader.biHeight      =  -font_height * 2; // (+) bottom-up, (-) top-down
+	    bitmap_info.bmiHeader.biWidth       =  pixels*4;
+	    bitmap_info.bmiHeader.biHeight      =  pixels*4; // (+) bottom-up, (-) top-down
 	    bitmap_info.bmiHeader.biPlanes      =  1;
 	    bitmap_info.bmiHeader.biBitCount    =  32;
 	    bitmap_info.bmiHeader.biCompression =  BI_RGB;
@@ -413,7 +412,7 @@ bake_loadfont(font_header* atlas, r32 points, s8* font_file, u32** glyphs)
 		    // SIZE size;
 		    // GetTextExtentPoint32A(device_context, &character, 1, &size);
     
-		    glyphs[c] = bake_loadglyph(device_context, bytes, -font_height,
+		    glyphs[c] = bake_loadglyph(device_context, bytes, pixels*2,
 					       &atlas->glyphs[c].offset,
 					       &atlas->glyphs[c].width,
 					       &atlas->glyphs[c].height);
@@ -487,124 +486,127 @@ bake_clearglyphs(u32** glyphs)
 {
     for(u32 glyph = 0; glyph < GLYPH_COUNT; glyph++)
     {
-	VirtualFree(glyphs[glyph], 0 , MEM_RELEASE);
+	VirtualFree(glyphs[glyph], 0, MEM_RELEASE);
     }
 }
 
 // packing.
-struct packing_rect
-{
-    s32 x0;
-    s32 y0;
-    s32 x1;
-    s32 y1;
+/*
+  struct packing_rect
+  {
+  s32 x0;
+  s32 y0;
+  s32 x1;
+  s32 y1;
 
-    u32 width () { return(((x1 - x0) > 0) ? (x1 - x0) : (x0 - x1)); }
-    u32 height() { return(((y1 - y0) > 0) ? (y1 - y0) : (y0 - y1)); }
-};
-struct packing_info
-{
-    u32 id = 0;
-    s32 width  = 0;
-    s32 height = 0;
-};
-struct packing_node
-{
-    u32 id = 0;
-    packing_rect rect = {};
-    packing_node* children[2];
-};
-struct packing_tree
-{
-    packing_node* head = 0;
-    u32 node_count = 1;
-};
+  u32 width () { return(((x1 - x0) > 0) ? (x1 - x0) : (x0 - x1)); }
+  u32 height() { return(((y1 - y0) > 0) ? (y1 - y0) : (y0 - y1)); }
+  };
+  struct packing_info
+  {
+  u32 id = 0;
+  s32 width  = 0;
+  s32 height = 0;
+  };
+  struct packing_node
+  {
+  u32 id = 0;
+  packing_rect rect = {};
+  packing_node* children[2];
+  };
+  struct packing_tree
+  {
+  packing_node* head = 0;
+  u32 node_count = 1;
+  };
 
-packing_node* tree_createnode(packing_tree* tree)
-{
-    return(tree->head + (tree->node_count++));
-}
-packing_node* tree_insertnode(packing_tree* tree, packing_node* node, packing_info info)
-{
-    // leaves do not have children.
+  packing_node* tree_createnode(packing_tree* tree)
+  {
+  return(tree->head + (tree->node_count++));
+  }
+  packing_node* tree_insertnode(packing_tree* tree, packing_node* node, packing_info info)
+  {
+  // leaves do not have children.
     
-    if(node->children[0])
-    {
-	// not a leaf.
+  if(node->children[0])
+  {
+  // not a leaf.
 
-	packing_node* return_node = tree_insertnode(tree, node->children[0], info);
-	if(return_node) return(return_node);
-	else            return(tree_insertnode(tree, node->children[1], info));
-    }
-    else
-    {
-	// leaf.
+  packing_node* return_node = tree_insertnode(tree, node->children[0], info);
+  if(return_node) return(return_node);
+  else            return(tree_insertnode(tree, node->children[1], info));
+  }
+  else
+  {
+  // leaf.
 
-	// is there a glyph_header here already?
-	if(node->id) return(0); 
-	// is it too wide or tall?
-	if(info.width > node->rect.width() || info.height > node->rect.height()) return(0);
-	// does it fit perfectly?
-	if(info.width == node->rect.width() && info.height == node->rect.height())
-	{
-	    node->id = info.id;
-	    return(node);
-	}
+  // is there a glyph_header here already?
+  if(node->id) return(0); 
+  // is it too wide or tall?
+  if(info.width > node->rect.width() || info.height > node->rect.height()) return(0);
+  // does it fit perfectly?
+  if(info.width == node->rect.width() && info.height == node->rect.height())
+  {
+  node->id = info.id;
+  return(node);
+  }
 
-	// none of the above? split!
+  // none of the above? split!
 
-	// create children
-	node->children[0] = tree_createnode(tree);
-	node->children[1] = tree_createnode(tree);
+  // create children
+  node->children[0] = tree_createnode(tree);
+  node->children[1] = tree_createnode(tree);
 
-	// do we split length-wise or height-wise?
-	s32 dw = node->rect.width() - info.width;
-	s32 dh = node->rect.height() - info.height;
+  // do we split length-wise or height-wise?
+  s32 dw = node->rect.width() - info.width;
+  s32 dh = node->rect.height() - info.height;
 
-	if(dw > dh)
-	{
-	    // height-wise.
-	    node->children[0]->rect = {
-		node->rect.x0,              node->rect.y0,
-		node->rect.x0 + info.width, node->rect.y1 };
-	    node->children[1]->rect = {
-		node->rect.x0 + (info.width + 1), node->rect.y0,
-		node->rect.x1,                    node->rect.y1 };
-	}
-	else
-	{
-	    // length-wise.
-	    node->children[0]->rect = {
-		node->rect.x0, node->rect.y0,
-		node->rect.x1, node->rect.y0 + info.height };
-	    node->children[1]->rect = {
-		node->rect.x0, node->rect.y0 + (info.height + 1),
-		node->rect.x1, node->rect.y1 };
-	}
+  if(dw > dh)
+  {
+  // height-wise.
+  node->children[0]->rect = {
+  node->rect.x0,              node->rect.y0,
+  node->rect.x0 + info.width, node->rect.y1 };
+  node->children[1]->rect = {
+  node->rect.x0 + (info.width + 1), node->rect.y0,
+  node->rect.x1,                    node->rect.y1 };
+  }
+  else
+  {
+  // length-wise.
+  node->children[0]->rect = {
+  node->rect.x0, node->rect.y0,
+  node->rect.x1, node->rect.y0 + info.height };
+  node->children[1]->rect = {
+  node->rect.x0, node->rect.y0 + (info.height + 1),
+  node->rect.x1, node->rect.y1 };
+  }
 
-	// insert into first child.
-	return (tree_insertnode(tree, node->children[0], info));
-    }
-}
+  // insert into first child.
+  return (tree_insertnode(tree, node->children[0], info));
+  }
+  }
+*/
 
 b32 bake_font()
 {
     b32 success = false;
-    
-    r32 current_pt = 72.0/(DPI/96);
-    u32 current_px = 96;
+
+    r32 points = strtof(height_field,0);
+    s32 pixels = (points/72)*96*(DPI/100);
     
     u32* glyphs[GLYPH_COUNT] = {};
 	 
-    font_header* atlas = (font_header*)VirtualAlloc(0, sizeof(font_header) + ((sqrt(current_px * current_px * GLYPH_COUNT)) * (sqrt(current_px * current_px * GLYPH_COUNT)) * 4), MEM_COMMIT, PAGE_READWRITE);
-	
-    atlas->glyph_width  = current_px;
-    atlas->glyph_height = current_px;
-    // atlas->width        = atlas->glyph_header_width  * GLYPH_HEADER_COLUMNS;
-    // atlas->height       = atlas->glyph_header_height * GLYPH_HEADER_ROWS;
+    //font_header* atlas = (font_header*)VirtualAlloc(0, sizeof(font_header) + ((sqrt(pixels * pixels * GLYPH_COUNT)) * (sqrt(pixels * pixels * GLYPH_COUNT)) * 4), MEM_COMMIT, PAGE_READWRITE);
+    font_header* atlas = (font_header*)VirtualAlloc(0,
+						    sizeof(font_header) + (((pixels*2*GLYPH_COLUMNS)*(pixels*2*GLYPH_ROWS))*4), MEM_COMMIT, PAGE_READWRITE);
+    atlas->glyph_width  = pixels*2;
+    atlas->glyph_height = pixels*2;
+    atlas->width        = atlas->glyph_width  * GLYPH_COLUMNS;
+    atlas->height       = atlas->glyph_height * GLYPH_ROWS;
 
-    atlas->width        = sqrt(atlas->glyph_width * atlas->glyph_height * GLYPH_COUNT);
-    atlas->height       = sqrt(atlas->glyph_width * atlas->glyph_height * GLYPH_COUNT);
+    //atlas->width        = sqrt(atlas->glyph_width * atlas->glyph_height * GLYPH_COUNT);
+    //atlas->height       = sqrt(atlas->glyph_width * atlas->glyph_height * GLYPH_COUNT);
     atlas->size         = sizeof(font_header) + (atlas->width * atlas->height * 4);
     atlas->glyph_count  = GLYPH_COUNT;
     atlas->glyph_offset = 9 * sizeof(u32);
@@ -620,13 +622,15 @@ b32 bake_font()
 	return(success);
     }
     
-    if(bake_loadfont(atlas, current_pt, open_file, glyphs))
+    if(bake_loadfont(atlas, points, pixels, open_file, glyphs))
     {
-	packing_tree tree = {};
-	tree.head = (packing_node*)VirtualAlloc(0, sizeof(packing_node) * GLYPH_COUNT * GLYPH_COUNT, MEM_COMMIT, PAGE_READWRITE);
-	tree.head->rect = {
-	    0, 0, (s32)atlas->width, (s32)atlas->height
-	};
+	/*
+	  packing_tree tree = {};
+	  tree.head = (packing_node*)VirtualAlloc(0, sizeof(packing_node) * GLYPH_COUNT * GLYPH_COUNT, MEM_COMMIT, PAGE_READWRITE);
+	  tree.head->rect = {
+	  0, 0, (s32)atlas->width, (s32)atlas->height
+	  };
+	*/
 
 	u8* glyph_data = (u8*)atlas + atlas->byte_offset;
 	for(s32 g = GLYPH_COUNT - 1; g > -1; g--)
@@ -634,56 +638,61 @@ b32 bake_font()
 	    u32 target_row    = g / GLYPH_COLUMNS;
 	    u32 target_column = g % GLYPH_COLUMNS;
 
-	    // the row height is equal to atlas->glyph_header_height.
+	    // the row height is equal to atlas->glyph_height.
 		
 	    // bytes contained in a single row =
-	    // atlas->glyph_header_height * atlas->width * 4
+	    // atlas->glyph_height * atlas->width * 4
 
-	    // bytes contained in a single glyph_header row =
-	    // atlas->glyph_header_width * 4
+	    // bytes contained in a single glyph  row =
+	    // atlas->glyph_width * 4
 
-	    // glyph_header beginning row =
-	    // (target_row * 'bytes contained in a single row') + (target_column * 'bytes contained in a single glyph_header row')
+	    // glyph beginning row =
+	    // (target_row * 'bytes contained in a single row') + (target_column * 'bytes contained in a single glyph row')
 
-	    // bytes contianed in a single glyph_header =
-	    // atlas->glyph_header_width * atlas->glyph_header_height * 4
+	    // bytes contianed in a single glyph =
+	    // atlas->glyph_width * atlas->glyph_height * 4
 
-	    // bytes contianed in entire glyph_header atlas =
-	    // 'bytes contianed in a single glyph_header' * GLYPH_HEADER_ROWS * GLYPH_HEADER_COLUMNS
+	    // bytes contianed in entire glyph atlas =
+	    // 'bytes contianed in a single glyph' * GLYPH_ROWS * GLYPH_COLUMNS
 
 	    // points to the first row of bytes where the glyph_header should be placed. (bottom-up)
-	    // u8* target =
-	    // (glyph_header_data + (atlas->width * atlas->height * 4) - (atlas->width * atlas->glyph_header_height * 4))
-	    // +
-	    // (atlas->glyph_header_width * 4 * target_column)
-	    // -
-	    // (atlas->width * atlas->glyph_header_height * 4 * target_row);
+	    u8* target =
+	    (glyph_data + (atlas->width * atlas->height * 4) - (atlas->width * atlas->glyph_height * 4))
+	    +
+	    (atlas->glyph_width * 4 * target_column)
+	    -
+	    (atlas->width * atlas->glyph_height * 4 * target_row);
 
 	    u8* source = (u8*)(glyphs[g]);
 		
-	    //write_bitmap(source, atlas->glyph_headers[g].width, atlas->glyph_headers[g].height, atlas->glyph_headers[g].width, target, atlas->width);
-
-	    packing_info info = {};
-	    info.id     = g + 1;
-	    info.width  = atlas->glyphs[g].width;
-	    info.height = atlas->glyphs[g].height;
-		
-	    packing_node* node = tree_insertnode(&tree, tree.head, info);
-	    atlas->glyphs[g].u0 = node->rect.x0/(r32)atlas->width;
-	    atlas->glyphs[g].v0 = node->rect.y1/(r32)atlas->height;
-	    atlas->glyphs[g].u1 = node->rect.x1/(r32)atlas->width;
-	    atlas->glyphs[g].v1 = node->rect.y0/(r32)atlas->height;
-
-	    u8* target = glyph_data + (node->rect.y0 * atlas->width * 4) + (node->rect.x0 * 4);
 	    bake_writeglyph(source, atlas->glyphs[g].width, atlas->glyphs[g].height, atlas->glyphs[g].width, target, atlas->width);
+
+	    // uv.
+	    atlas->glyphs[g].u0 = (target_column * atlas->glyph_width)/(r32)atlas->width;
+	    atlas->glyphs[g].v0 = ((((GLYPH_ROWS - 1) - target_row) * atlas->glyph_height) + atlas->glyphs[g].height)/(r32)atlas->height;
+	    atlas->glyphs[g].u1 = ((target_column * atlas->glyph_width) + atlas->glyphs[g].width)/(r32)atlas->width;
+	    atlas->glyphs[g].v1 = (((GLYPH_ROWS - 1) - target_row) * atlas->glyph_height)/(r32)atlas->height;
+
+	    /*
+	      if(!(atlas->glyphs[g].width == 0 || atlas->glyphs[g].height == 0))
+	      {
+	      packing_info info = {};
+	      info.id     = g + 1;
+	      info.width  = atlas->glyphs[g].width;
+	      info.height = atlas->glyphs[g].height;
+		
+	      packing_node* node = tree_insertnode(&tree, tree.head, info);
+	      atlas->glyphs[g].u0 = node->rect.x0/(r32)atlas->width;
+	      atlas->glyphs[g].v0 = node->rect.y1/(r32)atlas->height;
+	      atlas->glyphs[g].u1 = node->rect.x1/(r32)atlas->width;
+	      atlas->glyphs[g].v1 = node->rect.y0/(r32)atlas->height;
+
+	      u8* target = glyph_data + (node->rect.y0 * atlas->width * 4) + (node->rect.x0 * 4);
+	      bake_writeglyph(source, atlas->glyphs[g].width, atlas->glyphs[g].height, atlas->glyphs[g].width, target, atlas->width);
+	      }
+	    */
 	}
 	
-	// uv.
-	// atlas->glyph_headers[g].u0 = (target_column * atlas->glyph_header_width)/(r32)atlas->width;
-	// atlas->glyph_headers[g].v0 = ((((GLYPH_HEADER_ROWS - 1) - target_row) * atlas->glyph_header_height) + atlas->glyph_headers[g].height)/(r32)atlas->height;
-	// atlas->glyph_headers[g].u1 = ((target_column * atlas->glyph_header_width) + atlas->glyph_headers[g].width)/(r32)atlas->width;
-	// atlas->glyph_headers[g].v1 = (((GLYPH_HEADER_ROWS - 1) - target_row) * atlas->glyph_header_height)/(r32)atlas->height;
-
 	bake_clearglyphs(glyphs);
 
 	// write font (.font)
@@ -691,7 +700,7 @@ b32 bake_font()
 	// write bitmap (.bmp)
 	bitmap_saveas(bitmap_file, atlas->width, atlas->height, (s8*)atlas + atlas->byte_offset);
 
-	VirtualFree(tree.head, 0, MEM_RELEASE);
+	//VirtualFree(tree.head, 0, MEM_RELEASE);
 	VirtualFree(atlas, 0, MEM_RELEASE);
 
 	success = true;
@@ -700,12 +709,9 @@ b32 bake_font()
     {
 	OutputDebugStringA("'windows_loadfont' failed!\n");
     }
-	
     
     return(success);
 }
-
-// baking
 
 #define WINDOWS_BUTTON_TRUETYPE 1
 #define WINDOWS_BUTTON_SAVE     2
@@ -782,7 +788,6 @@ internal void windows_userinterface(HWND window)
     SendMessageA(window_fontheight_field,  WM_SETFONT, (WPARAM)font, TRUE);
     SendMessageA(window_bake_button,       WM_SETFONT, (WPARAM)font, TRUE);
 }
-
 LRESULT WINAPI windows_procedure_message(HWND window, UINT message, WPARAM wparam, LPARAM lparam)
 {
     switch(message)
@@ -879,10 +884,10 @@ LRESULT WINAPI windows_procedure_message(HWND window, UINT message, WPARAM wpara
 }
     
 s32 WINAPI
-WinMain (HINSTANCE instance,
-	 HINSTANCE prev_instance,
-	 LPSTR     lpCmdLine,
-	 s32       nShowCmd)
+WinMain (HINSTANCE          instance,
+	 HINSTANCE previous_instance,
+	 LPSTR     commandline,
+	 s32       show_commandline)
 {
     // Atlas Baked
     
@@ -891,64 +896,67 @@ WinMain (HINSTANCE instance,
 
     // Atlas Baked
 
-    WNDCLASSA window_class = {};
-    window_class.style 	       = CS_OWNDC | CS_HREDRAW | CS_VREDRAW;
-    window_class.lpfnWndProc   = windows_procedure_message;
-    window_class.hInstance     = instance;
-    window_class.hCursor       = LoadCursorA(0, IDC_ARROW);
-    window_class.hbrBackground = CreateSolidBrush(RGB(112, 169, 161));
-    window_class.lpszClassName = "Atlas Baked";
-
-    if(RegisterClassA(&window_class))
+    if(commandline[0] == '\0')
     {
-	RECT window_rect = {
-	    (GetSystemMetrics(SM_CXSCREEN) - window_width )/2,
-	    (GetSystemMetrics(SM_CYSCREEN) - window_height)/2,
-	    window_width  + window_rect.left,
-	    window_height + window_rect.top,
-	};
-	
-	if(!AdjustWindowRect(&window_rect, WS_SYSMENU | WS_MINIMIZEBOX | WS_CAPTION, false)) {
-	    OutputDebugStringA("'AdjustWindowRect' failed!\n");
-	}
+	WNDCLASSA window_class = {};
+	window_class.style 	       = CS_OWNDC | CS_HREDRAW | CS_VREDRAW;
+	window_class.lpfnWndProc   = windows_procedure_message;
+	window_class.hInstance     = instance;
+	window_class.hCursor       = LoadCursorA(0, IDC_ARROW);
+	window_class.hbrBackground = CreateSolidBrush(RGB(112, 169, 161)); // 0x ()
+	window_class.lpszClassName = "Atlas Baked";
 
-	HWND window = CreateWindowA(window_class.lpszClassName,
-				    window_class.lpszClassName,
-				    WS_VISIBLE | WS_SYSMENU | WS_MINIMIZEBOX | WS_CAPTION,
-				    window_rect.left, window_rect.top,
-				    (window_rect.right - window_rect.left),
-				    (window_rect.bottom - window_rect.top),
-				    0, 0,
-				    instance,
-				    0);
-	
-	if(window)
+	if(RegisterClassA(&window_class))
 	{
-	    running = true;
-
-	    while(running)
-	    {
-		MSG message = {};
-		while(PeekMessageA(&message, window, 0, 0, PM_REMOVE))
-		{
-		    TranslateMessage(&message);
-		    DispatchMessageA(&message);
-		}
-
-		// here.
+	    RECT window_rect = {
+		(GetSystemMetrics(SM_CXSCREEN) - window_width )/2,
+		(GetSystemMetrics(SM_CYSCREEN) - window_height)/2,
+		window_width  + window_rect.left,
+		window_height + window_rect.top,
+	    };
+	
+	    if(!AdjustWindowRect(&window_rect, WS_SYSMENU | WS_MINIMIZEBOX | WS_CAPTION, false)) {
+		OutputDebugStringA("'AdjustWindowRect' failed!\n");
 	    }
+
+	    HWND window = CreateWindowA(window_class.lpszClassName,
+					window_class.lpszClassName,
+					WS_VISIBLE | WS_SYSMENU | WS_MINIMIZEBOX | WS_CAPTION,
+					window_rect.left, window_rect.top,
+					(window_rect.right - window_rect.left),
+					(window_rect.bottom - window_rect.top),
+					0, 0,
+					instance,
+					0);
+	
+	    if(window)
+	    {
+		running = true;
+
+		while(running)
+		{
+		    MSG message = {};
+		    while(PeekMessageA(&message, window, 0, 0, PM_REMOVE))
+		    {
+			TranslateMessage(&message);
+			DispatchMessageA(&message);
+		    }
+
+		    // here.
+		}
 	    
-	    DestroyWindow(window);
+		DestroyWindow(window);
+	    }
+	    else
+	    {
+		OutputDebugStringA("'CreateWindowA' failed!\n");
+	    }
+	    UnregisterClassA(window_class.lpszClassName, instance);
 	}
 	else
 	{
-	    OutputDebugStringA("'CreateWindowA' failed!\n");
+	    OutputDebugStringA("'RegisterClassA' failed!\n");
 	}
-	UnregisterClassA(window_class.lpszClassName, instance);
-    }
-    else
-    {
-	OutputDebugStringA("'RegisterClassA' failed!\n");
     }
 
     return(0);
