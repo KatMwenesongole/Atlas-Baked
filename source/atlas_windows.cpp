@@ -73,8 +73,8 @@ struct bitmap_header
     u32 significant_colours; // must be 0
 };
 // ttf.
-#define SWAPWORD(x) MAKEWORD(HIBYTE(x), LOBYTE(x))
-#define SWAPLONG(x) MAKELONG(SWAPWORD(HIWORD(x)), SWAPWORD(LOWORD(x)))
+#define TTF_SWAPWORD(x) MAKEWORD(HIBYTE(x), LOBYTE(x))
+#define TTF_SWAPLONG(x) MAKELONG(TTF_SWAPWORD(HIWORD(x)), TTF_SWAPWORD(LOWORD(x)))
 struct ttf_offsettable_header
 {
     u16 major_version;
@@ -112,14 +112,14 @@ struct ttf_name_header
 #define GLYPH_COLUMNS 16
 struct glyph_header
 {
-    s8   ascii;
+    s8  character;
     s32 offset;
     
     s32     spacing;
     s32 pre_spacing;
     
-    u32  width;
-    u32 height;
+    s32  width;
+    s32 height;
 
     r32 u0;
     r32 u1;
@@ -128,100 +128,59 @@ struct glyph_header
 };
 struct font_header
 {
-    u32   size;
-    u32  width;
-    u32 height;
-    u32  count;
+    s32   size;
+    s32  width;
+    s32 height;
+    s32 glyph_count;
 
-    u32 glyph_height;
-    u32 glyph_width;
+    s32 glyph_height;
+    s32 glyph_width;
 
-    u32 line_spacing;
+    s32 line_spacing;
 
-    u32 glyph_offset;
-    u32  byte_offset;
+    s32 glyph_offset;
+    s32  byte_offset;
     
     glyph_header glyphs[GLYPH_COUNT];
 };
 #pragma pack(pop)
 
-void font_preview_savebmp(s8* bmp,  u32 bmp_width,  u32 bmp_height,  u8* bmp_data)
+// bitmap.
+internal void
+bitmap_saveas(s8* bitmap_file, s32 bitmap_width, s32 bitmap_height, s8* bitmap_data)
 {
-    u32 bmp_data_size = bmp_width * bmp_height * 4;
+    s32 bitmap_size = bitmap_width * bitmap_height * 4;
 
-    // (A8 R8 G8 B8)
     bitmap_header header = {};
     header.signature      = 0x4D42; 
-    header.file_size      = sizeof(bitmap_header) + bmp_data_size;
+    header.file_size      = sizeof(bitmap_header) + bitmap_size;
     header.byte_offset    = sizeof(bitmap_header); 
     header.header_size    = sizeof(BITMAPINFOHEADER); 
-    header.width          = bmp_width;  
-    header.height         = bmp_height; 
+    header.width          = bitmap_width;  
+    header.height         = bitmap_height; 
     header.planes         = 1;            
     header.bits_per_pixel = 32;      
     header.compression    = 0;
-    header.image_size     = bmp_width * bmp_height * 4;
+    header.image_size     = bitmap_size;
 
-    u8* save = (u8*)VirtualAlloc(0, header.file_size, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
+    s8* save = (s8*)VirtualAlloc(0, header.file_size, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
 
-    CopyMemory((PVOID)save, (VOID*)&header, (SIZE_T)header.header_size);
-    CopyMemory((PVOID)(save + header.byte_offset), (VOID*)bmp_data, (SIZE_T)bmp_data_size);
+    mem_copy(&header, save, header.header_size);
+    mem_copy(bitmap_data, save + header.byte_offset, bitmap_size);
 
-    io_writefile(bmp, header.file_size, save);
+    io_writefile(bitmap_file, header.file_size, save);
 
     VirtualFree(save, 0, MEM_RELEASE);
 }
-internal void
-write_bitmap(void* source, u32 source_size_x, u32 source_size_y, u32 source_width,
-	     void* target, u32 target_width)
-{
-    for(u32 sy = 0; sy < source_size_y; sy++)
-    {
-	CopyMemory(target, source, (source_size_x * 4));
-	target = (u32*)target + target_width;
-	source = (u32*)source + source_width;
-    }
-}
-
-// cmd. 
-internal void
-parse_commandline(s8* cmdline, s8* filename, s8* fontname)
-{
-    u32 c = 0;
-    s8 chr = cmdline[c];
-    
-    while(chr != '\0')
-    {
-	while(chr != ',')
-	{
-	    filename[c] = chr;
-	    chr = cmdline[++c];
-	}
-	filename[c + 1] = '\0';
-	c += 2;
-	chr = cmdline[c];
-
-	u32 counter = 0;
-	while(chr != '\0')
-	{
-	    fontname[counter] = chr;
-	    chr = cmdline[++c];
-	    counter++;
-	}
-	fontname[c + 1] = '\0';
-	c += 2;
-	chr = cmdline[c];
-    }
-}
-
 // ttf.
-b32 ttf_fontfamily(s8* font_file, s8* font_family)
+internal b32
+ttf_fontfamily(s8* font_file, s8* font_family)
 {
     io_file font = io_readfile(font_file);
     if(font.source)
     {
 	ttf_offsettable_header* offset_table = (ttf_offsettable_header*)font.source;
-	offset_table->num_of_tables = SWAPWORD(offset_table->num_of_tables);
+	offset_table->num_of_tables = TTF_SWAPWORD(offset_table->num_of_tables);
 
 	b32 table_found = false;
 
@@ -235,8 +194,8 @@ b32 ttf_fontfamily(s8* font_file, s8* font_family)
 	       directory_table->table_name[3] == 'e')
 	    {
 		table_found = true;
-		directory_table->length = SWAPLONG(directory_table->length);
-		directory_table->offset = SWAPLONG(directory_table->offset);
+		directory_table->length = TTF_SWAPLONG(directory_table->length);
+		directory_table->offset = TTF_SWAPLONG(directory_table->offset);
 		break;
 	    }
 	    directory_table++;
@@ -246,17 +205,17 @@ b32 ttf_fontfamily(s8* font_file, s8* font_family)
 	{
 	    ttf_nametable_header* name_table = (ttf_nametable_header*)((s8*)font.source + directory_table->offset);
 
-	    name_table->namerecords_count = SWAPWORD(name_table->namerecords_count);
-	    name_table->storage_offset    = SWAPWORD(name_table->storage_offset);
+	    name_table->namerecords_count = TTF_SWAPWORD(name_table->namerecords_count);
+	    name_table->storage_offset    = TTF_SWAPWORD(name_table->storage_offset);
 
 	    ttf_name_header* name_header = (ttf_name_header*)((s8*)name_table + sizeof(ttf_nametable_header));
 	    for(s32 record = 0; record < name_table->namerecords_count; record++)
 	    {
-		name_header->name_id = SWAPWORD(name_header->name_id);
+		name_header->name_id = TTF_SWAPWORD(name_header->name_id);
 		if(name_header->name_id == 1) // font family
 		{
-		    name_header->string_length = SWAPWORD(name_header->string_length);
-		    name_header->string_offset = SWAPWORD(name_header->string_offset);
+		    name_header->string_length = TTF_SWAPWORD(name_header->string_length);
+		    name_header->string_offset = TTF_SWAPWORD(name_header->string_offset);
 
 		    // note, we can not to a simple 'mem_copy' as we require a null terminated string.
 		    //       it would appear the spaces between letters are '\0'
@@ -282,118 +241,121 @@ b32 ttf_fontfamily(s8* font_file, s8* font_family)
     return(false);
 }
 
-internal u32*
-bake_loadglyph(HFONT font, font_header* atlas, u32 size_px, s8 ascii,
-	       u32* glyph_width, u32* glyph_height,
-	       s32* offset, s32* spacing, s32* pre_spacing)
-{
-    HDC device_context = CreateCompatibleDC(GetDC(0));
+// cmd. 
+// internal void
+// parse_commandline(s8* cmdline, s8* filename, s8* fontname)
+// {
+//     u32 c = 0;
+//     s8 chr = cmdline[c];
     
-    if(device_context)
+//     while(chr != '\0')
+//     {
+// 	while(chr != ',')
+// 	{
+// 	    filename[c] = chr;
+// 	    chr = cmdline[++c];
+// 	}
+// 	filename[c + 1] = '\0';
+// 	c += 2;
+// 	chr = cmdline[c];
+
+// 	u32 counter = 0;
+// 	while(chr != '\0')
+// 	{
+// 	    fontname[counter] = chr;
+// 	    chr = cmdline[++c];
+// 	    counter++;
+// 	}
+// 	fontname[c + 1] = '\0';
+// 	c += 2;
+// 	chr = cmdline[c];
+//     }
+// }
+
+
+// bake.
+internal void
+bake_writeglyph(void* source, u32 source_size_x, u32 source_size_y, u32 source_width,
+		void* target, u32 target_width)
+{
+    for(u32 sy = 0; sy < source_size_y; sy++)
     {
-	BITMAPINFO bitmap_info              = {};
-	bitmap_info.bmiHeader.biSize        =  sizeof(bitmap_info.bmiHeader);
-	bitmap_info.bmiHeader.biWidth       =  size_px * 2;
-	bitmap_info.bmiHeader.biHeight      =  size_px * 2; // (+) bottom-up, (-) top-down
-	bitmap_info.bmiHeader.biPlanes      =  1;
-	bitmap_info.bmiHeader.biBitCount    =  32;
-	bitmap_info.bmiHeader.biCompression =  BI_RGB;
-
-	void*   bytes = 0;
-	HBITMAP bitmap_handle = CreateDIBSection(device_context, &bitmap_info, DIB_RGB_COLORS, &bytes, 0, 0);
-	
-	u32* bitmap_memory = (u32*)bytes;
-	if(bitmap_handle && bitmap_memory)
-	{
-	    SelectObject (device_context, bitmap_handle);
-	    SelectObject (device_context, font);
-	    SetBkColor   (device_context, RGB(  0,   0,   0));
-	    SetTextColor (device_context, RGB(255, 255, 255));
-
-	    TextOutA(device_context, 0, 0, &ascii, 1);
-
-	    SIZE size;
-	    GetTextExtentPoint32A(device_context, &ascii, 1, &size);
-
-	    u32  bb_width  = size_px * 2;
-	    u32  bb_height = size_px * 2;
-	    u32* bb_memory = (u32*)VirtualAlloc(0, (bb_width * bb_height * 4), MEM_COMMIT, PAGE_READWRITE);
-
-	    // copy and calculate bounds.
-	    
-	    s32 max_column = 0;
-	    s32 min_column = bb_width;
-	    s32 max_row    = 0;
-	    s32 min_row    = bb_height;
-
-	    u32* ptr = bb_memory;
-	    for(u32 by = 0; by < bb_height; by++)  
-	    {
-		u32* bmp = bitmap_memory;
-		for(u32 bx = 0; bx < bb_width; bx++) 
-		{
-		    u8 a = *bmp++ & 0xff; 
-		    if(a)
-		    {
-			if(bx < min_column) min_column = bx;
-			if(bx > max_column) max_column = bx;
-			if(by < min_row)    min_row    = by;
-			if(by > max_row)    max_row    = by;
-		    }
-		    *ptr++ = a | (a << 8) | (a << 16) | (a << 24);
-		}
-		bitmap_memory += (size_px * 2);
-	    }
-	    
-	    *glyph_width  = (max_column != 0) ? ((max_column - min_column) + 1) : 0;
-	    *glyph_height = (max_row    != 0) ? ((max_row    - min_row   ) + 1) : 0;
-
-	    *glyph_width  = (*glyph_width  > size_px) ? size_px : *glyph_width;
-	    *glyph_height = (*glyph_height > size_px) ? size_px : *glyph_height;
-
-	    // smallest possible glyph.
-	    
-	    u32* glyph_memory = (u32*)VirtualAlloc(0, *glyph_width * *glyph_height * 4, MEM_COMMIT, PAGE_READWRITE);
-	    if(glyph_memory)
-	    {
-		u32* glyph_ptr = glyph_memory;
-
-		u32* bb_ptr = bb_memory;
-		bb_ptr += (min_row * bb_width) + min_column;
-
-		glyph_ptr = glyph_memory;
-
-		write_bitmap(bb_ptr, *glyph_width, *glyph_height, bb_width, glyph_memory, *glyph_width);
-	    }
-
-	    // vertical. 
-	    TEXTMETRICA metrics = {};
-	    GetTextMetricsA(device_context, &metrics);
-	    *offset = max_row - (bb_height - metrics.tmAscent);
-
-	    // horizontal.
-	    ABC character_metrics = {};
-	    GetCharABCWidthsA(device_context, (u32)ascii, (u32)ascii, &character_metrics);
-	    *spacing     = character_metrics.abcC;
-	    *pre_spacing = character_metrics.abcA;
-
-	    // clean.
-	    VirtualFree(bb_memory, 0, MEM_RELEASE);
-	    DeleteObject(bitmap_handle);
-
-	    return((u32*)glyph_memory); 
-	}
-	else
-	{
-	    OutputDebugStringA("'CreateDIBSection' faliure!\n");
-	}
+	mem_copy(source, target, (source_size_x * 4));
+	target = (u32*)target + target_width;
+	source = (u32*)source + source_width;
     }
-    else
+}
+internal u32*
+bake_loadglyph(HDC device_context, void* bytes,
+	       s32 size_px,
+	       s32* offset,
+	       s32* glyph_width,
+	       s32* glyph_height)
+{
+    ASSERT(bytes);
+   
+    u32* bitmap_memory = (u32*)bytes;
+
+    u32  bb_width  = size_px * 2;
+    u32  bb_height = size_px * 2;
+    u32* bb_memory = (u32*)VirtualAlloc(0, (bb_width * bb_height * 4), MEM_COMMIT, PAGE_READWRITE);
+
+    // copy and calculate bounds.
+	    
+    s32 max_column = 0;
+    s32 min_column = bb_width;
+    s32 max_row    = 0;
+    s32 min_row    = bb_height;
+
+    u32* ptr = bb_memory;
+    for(u32 by = 0; by < bb_height; by++)  
     {
-	OutputDebugStringA("'CreateCompatibleDC' faliure!\n");
+	u32* bmp = bitmap_memory;
+	for(u32 bx = 0; bx < bb_width; bx++) 
+	{
+	    u8 a = *bmp++ & 0xff; 
+	    if(a)
+	    {
+		if(bx < min_column) min_column = bx;
+		if(bx > max_column) max_column = bx;
+		if(by < min_row)    min_row    = by;
+		if(by > max_row)    max_row    = by;
+	    }
+	    *ptr++ = a | (a << 8) | (a << 16) | (a << 24);
+	}
+	bitmap_memory += (size_px * 2);
+    }
+	    
+    *glyph_width  = (max_column != 0) ? ((max_column - min_column) + 1) : 0;
+    *glyph_height = (max_row    != 0) ? ((max_row    - min_row   ) + 1) : 0;
+
+    *glyph_width  = (*glyph_width  > size_px) ? size_px : *glyph_width;
+    *glyph_height = (*glyph_height > size_px) ? size_px : *glyph_height;
+
+    // smallest possible glyph.
+	    
+    u32* glyph_memory = (u32*)VirtualAlloc(0, *glyph_width * *glyph_height * 4, MEM_COMMIT, PAGE_READWRITE);
+    if(glyph_memory)
+    {
+	u32* glyph_ptr = glyph_memory;
+
+	u32* bb_ptr = bb_memory;
+	bb_ptr += (min_row * bb_width) + min_column;
+
+	glyph_ptr = glyph_memory;
+
+	bake_writeglyph(bb_ptr, *glyph_width, *glyph_height, bb_width, glyph_memory, *glyph_width);
     }
 
-    return(0);
+    // vertical. 
+    TEXTMETRICA metrics = {};
+    GetTextMetricsA(device_context, &metrics);
+    *offset = max_row - (bb_height - metrics.tmAscent);
+
+    // clean.
+    VirtualFree(bb_memory, 0, MEM_RELEASE);
+
+    return((u32*)glyph_memory); 
 }
 internal b32
 bake_loadfont(font_header* atlas, r32 points, s8* font_file, u32** glyphs)
@@ -420,66 +382,100 @@ bake_loadfont(font_header* atlas, r32 points, s8* font_file, u32** glyphs)
 
     if(font_handle)
     {
-	s32 character_count = 0;
-	s32 max_offset = 0;
+	HDC device_context = CreateCompatibleDC(GetDC(0));
 
-	TEXTMETRIC metrics = {};
-	GetTextMetrics(GetDC(0), &metrics);
-
-	atlas->line_spacing = metrics.tmInternalLeading;
-
-	for(s32 i = 32; i < 256; i++) // '!'(32) -> 'ÿ'(255) 
+	if(device_context)
 	{
-	    atlas->glyphs[character_count].ascii = i;
-	    glyphs[character_count] = bake_loadglyph(font_handle, atlas, -font_height, i,
-						     &atlas->glyphs[character_count].width,
-						     &atlas->glyphs[character_count].height,
-						     &atlas->glyphs[character_count].offset,
-						     &atlas->glyphs[character_count].spacing,
-						     &atlas->glyphs[character_count].pre_spacing);
-	    
-	    if(atlas->glyphs[character_count].offset > max_offset) { max_offset = atlas->glyphs[character_count].offset; }
+	    BITMAPINFO bitmap_info              = {};
+	    bitmap_info.bmiHeader.biSize        =  sizeof(bitmap_info.bmiHeader);
+	    bitmap_info.bmiHeader.biWidth       =  -font_height * 2;
+	    bitmap_info.bmiHeader.biHeight      =  -font_height * 2; // (+) bottom-up, (-) top-down
+	    bitmap_info.bmiHeader.biPlanes      =  1;
+	    bitmap_info.bmiHeader.biBitCount    =  32;
+	    bitmap_info.bmiHeader.biCompression =  BI_RGB;
 
-	    character_count++;
-	}
-
-	// sort.
-
-	// 7 3 6 2 9 5 1
-
-	for(u32 g = 0; g < GLYPH_COUNT; g++)
-	{
-	    for(s32 h = 0; h < GLYPH_COUNT; h++)
+	    s32 max_offset = 0;
+	    s32 c = 0;
+	    for(s32 g = 32; g < 256; g++) // '!'(32) -> 'ÿ'(255) 
 	    {
-		if((atlas->glyphs[g].width * atlas->glyphs[g].height) < (atlas->glyphs[h].width * atlas->glyphs[h].height))
+		void*   bytes = 0;
+		HBITMAP bitmap_handle = CreateDIBSection(device_context, &bitmap_info, DIB_RGB_COLORS, &bytes, 0, 0);
+		if(bitmap_handle)
 		{
-		    // swap.
-		    u32*  glyph_ptr = glyphs[g];
-		    glyph_header glyph_info = atlas->glyphs[g];
+		    // standard.
+		    SelectObject (device_context, bitmap_handle);
+		    SelectObject (device_context, font_handle);
+		    SetBkColor   (device_context, RGB(  0,   0,   0));
+		    SetTextColor (device_context, RGB(255, 255, 255));
+		    TextOutA(device_context, 0, 0, (LPCSTR)&g, 1); // character output.
 
-		    CopyMemory(&glyphs[g], &glyphs[h], sizeof(u32*));
-		    CopyMemory(&atlas->glyphs[g], &atlas->glyphs[h], sizeof(glyph_header));
-
-		    CopyMemory(&glyphs[h], &glyph_ptr, sizeof(u32*));
-		    CopyMemory(&atlas->glyphs[h], &glyph_info, sizeof(glyph_header));
+		    // ?
+		    // SIZE size;
+		    // GetTextExtentPoint32A(device_context, &character, 1, &size);
+    
+		    glyphs[c] = bake_loadglyph(device_context, bytes, -font_height,
+					       &atlas->glyphs[c].offset,
+					       &atlas->glyphs[c].width,
+					       &atlas->glyphs[c].height);
 		    
-		    h = -1;
+		    if(atlas->glyphs[c].offset > max_offset) { max_offset = atlas->glyphs[c].offset; }
+
+		    ABC character_metrics = {};
+		    GetCharABCWidthsA(device_context, (u32)g, (u32)g, &character_metrics);
+		    atlas->glyphs[c].character   = g;
+		    atlas->glyphs[c].    spacing = character_metrics.abcC;
+		    atlas->glyphs[c].pre_spacing = character_metrics.abcA;
+
+		    DeleteObject(bitmap_handle);
 		}
-	    
+		else
+		{
+		    OutputDebugStringA("'CreateDIBSection' failed!\n");
+		}
+		c++;
 	    }
-	}
+	    for(u32 i = 0; i < GLYPH_COUNT; i++)
+	    {
+		atlas->glyphs[i].offset = max_offset - atlas->glyphs[i].offset;
+	    }
 
-	for(u32 i = 0; i < 233; i++)
+	    TEXTMETRIC metrics = {};
+	    GetTextMetrics(device_context, &metrics);
+	    atlas->line_spacing = metrics.tmInternalLeading;
+
+	    // sort by area.
+	    // for(u32 g = 0; g < GLYPH_COUNT; g++)
+	    // {
+	    // 	for(s32 h = 0; h < GLYPH_COUNT; h++)
+	    // 	{
+	    // 	    if((atlas->glyphs[g].width * atlas->glyphs[g].height) < (atlas->glyphs[h].width * atlas->glyphs[h].height))
+	    // 	    {
+	    // 		// swap.
+	    // 		u32*  glyph_ptr = glyphs[g];
+	    // 		glyph_header glyph_info = atlas->glyphs[g];
+
+	    // 		CopyMemory(&glyphs[g], &glyphs[h], sizeof(u32*));
+	    // 		CopyMemory(&atlas->glyphs[g], &atlas->glyphs[h], sizeof(glyph_header));
+
+	    // 		CopyMemory(&glyphs[h], &glyph_ptr, sizeof(u32*));
+	    // 		CopyMemory(&atlas->glyphs[h], &glyph_info, sizeof(glyph_header));
+		    
+	    // 		h = -1;
+	    // 	    }
+	    
+	    // 	}
+	    // }
+
+	    success = true;
+	}
+	else
 	{
-	    atlas->glyphs[i].offset = max_offset - atlas->glyphs[i].offset;
+	    OutputDebugStringA("'CreateCompatibleDC' failed!\n");
 	}
-
-	success = true;
     }
     else
     {
 	OutputDebugStringA("'CreateFontA' failed!\n");
-	success = false;
     }
 
     RemoveFontResourceExA(font_file, FR_PRIVATE, 0);
@@ -487,11 +483,11 @@ bake_loadfont(font_header* atlas, r32 points, s8* font_file, u32** glyphs)
     return(success);
 };
 internal void
-bake_clearglyph_headers(u32** glyph_headers)
+bake_clearglyphs(u32** glyphs)
 {
-    for(u32 glyph_header = 0; glyph_header < GLYPH_COUNT; glyph_header++)
+    for(u32 glyph = 0; glyph < GLYPH_COUNT; glyph++)
     {
-	VirtualFree(glyph_headers[glyph_header], 0 , MEM_RELEASE);
+	VirtualFree(glyphs[glyph], 0 , MEM_RELEASE);
     }
 }
 
@@ -610,7 +606,7 @@ b32 bake_font()
     atlas->width        = sqrt(atlas->glyph_width * atlas->glyph_height * GLYPH_COUNT);
     atlas->height       = sqrt(atlas->glyph_width * atlas->glyph_height * GLYPH_COUNT);
     atlas->size         = sizeof(font_header) + (atlas->width * atlas->height * 4);
-    atlas->count        = GLYPH_COUNT;
+    atlas->glyph_count  = GLYPH_COUNT;
     atlas->glyph_offset = 9 * sizeof(u32);
     atlas->byte_offset  = sizeof(font_header);
 
@@ -679,7 +675,7 @@ b32 bake_font()
 	    atlas->glyphs[g].v1 = node->rect.y0/(r32)atlas->height;
 
 	    u8* target = glyph_data + (node->rect.y0 * atlas->width * 4) + (node->rect.x0 * 4);
-	    write_bitmap(source, atlas->glyphs[g].width, atlas->glyphs[g].height, atlas->glyphs[g].width, target, atlas->width);
+	    bake_writeglyph(source, atlas->glyphs[g].width, atlas->glyphs[g].height, atlas->glyphs[g].width, target, atlas->width);
 	}
 	
 	// uv.
@@ -688,12 +684,12 @@ b32 bake_font()
 	// atlas->glyph_headers[g].u1 = ((target_column * atlas->glyph_header_width) + atlas->glyph_headers[g].width)/(r32)atlas->width;
 	// atlas->glyph_headers[g].v1 = (((GLYPH_HEADER_ROWS - 1) - target_row) * atlas->glyph_header_height)/(r32)atlas->height;
 
-	bake_clearglyph_headers(glyphs);
+	bake_clearglyphs(glyphs);
 
 	// write font (.font)
 	io_writefile(save_file, atlas->size, atlas);
 	// write bitmap (.bmp)
-	font_preview_savebmp(bitmap_file, atlas->width, atlas->height, (u8*)atlas + atlas->byte_offset);
+	bitmap_saveas(bitmap_file, atlas->width, atlas->height, (s8*)atlas + atlas->byte_offset);
 
 	VirtualFree(tree.head, 0, MEM_RELEASE);
 	VirtualFree(atlas, 0, MEM_RELEASE);
@@ -711,9 +707,9 @@ b32 bake_font()
 
 // baking
 
-#define SELECT_OPEN_BUTTON 1
-#define SELECT_SAVE_BUTTON 2
-#define BAKE_BUTTON        3
+#define WINDOWS_BUTTON_TRUETYPE 1
+#define WINDOWS_BUTTON_SAVE     2
+#define WINDOWS_BUTTON_BAKE     3
 
 global HWND window_truetype_field = 0;
 global HWND window_save_field = 0;
@@ -739,7 +735,7 @@ internal void windows_userinterface(HWND window)
     // field  = edit
     // button = button
     //
-    //        20px          15%        5%        80%          20px
+    //        20px          30%        5%        65%          20px
     //  [outer padding ] [ label ] [ button ] [ field ] [outer padding]
     //
     
@@ -757,52 +753,24 @@ internal void windows_userinterface(HWND window)
     s32 control_height = 40;
 
     // truetype font.
-    HWND window_truetype_label = CreateWindowA("STATIC", "Truetype font:", WS_CHILD | WS_VISIBLE | SS_CENTER,
-					       outer_padding, outer_padding,
-					       label_width, control_height, window, 0, 0, 0);
-    
-    HWND window_truetype_button = CreateWindowA("BUTTON", "...", WS_CHILD | WS_VISIBLE | WS_BORDER,
-						outer_padding + label_width + inner_padding, outer_padding,
-						button_width, control_height, window, (HMENU)SELECT_OPEN_BUTTON, 0, 0);
-    
-    window_truetype_field = CreateWindowA("EDIT", "C:/", WS_CHILD | WS_VISIBLE | WS_BORDER | ES_AUTOHSCROLL,
-					  outer_padding + label_width + button_width + (inner_padding*2), outer_padding,
-					  field_width, control_height, window, 0, 0, 0);
+    HWND window_truetype_label  = CreateWindowA("STATIC", "Truetype font:", WS_CHILD | WS_VISIBLE | SS_CENTER, outer_padding, outer_padding, label_width, control_height, window, 0, 0, 0);
+    HWND window_truetype_button = CreateWindowA("BUTTON", "...", WS_CHILD | WS_VISIBLE | WS_BORDER, outer_padding + label_width + inner_padding, outer_padding, button_width, control_height, window, (HMENU)WINDOWS_BUTTON_TRUETYPE, 0, 0);
+    window_truetype_field = CreateWindowA("EDIT", "C:/", WS_CHILD | WS_VISIBLE | WS_BORDER | ES_AUTOHSCROLL, outer_padding + label_width + button_width + (inner_padding*2), outer_padding, field_width, control_height, window, 0, 0, 0);
     
     // save location.
-    HWND window_save_label = CreateWindowA("STATIC", "Save location:", WS_CHILD | WS_VISIBLE | SS_CENTER, 
-					   outer_padding, outer_padding + line_padding,
-					   label_width, control_height, window, 0, 0, 0);
-    
-    HWND window_save_button = CreateWindowA("BUTTON", "...", WS_CHILD | WS_VISIBLE | WS_BORDER,
-					    outer_padding + label_width + inner_padding, outer_padding + line_padding,
-					    button_width, control_height, window, (HMENU)SELECT_SAVE_BUTTON, 0, 0);
-    
-    window_save_field = CreateWindowA("EDIT", "C:/", WS_CHILD | WS_VISIBLE | WS_BORDER | ES_AUTOHSCROLL,
-				      outer_padding + label_width + button_width + (inner_padding*2), outer_padding + line_padding,
-				      field_width, control_height, window, 0, 0, 0);
-
+    HWND window_save_label  = CreateWindowA("STATIC", "Save location:", WS_CHILD | WS_VISIBLE | SS_CENTER, outer_padding, outer_padding + line_padding, label_width, control_height, window, 0, 0, 0);
+    HWND window_save_button = CreateWindowA("BUTTON", "...", WS_CHILD | WS_VISIBLE | WS_BORDER, outer_padding + label_width + inner_padding, outer_padding + line_padding, button_width, control_height, window, (HMENU)WINDOWS_BUTTON_SAVE, 0, 0);
+    window_save_field = CreateWindowA("EDIT", "C:/", WS_CHILD | WS_VISIBLE | WS_BORDER | ES_AUTOHSCROLL, outer_padding + label_width + button_width + (inner_padding*2), outer_padding + line_padding, field_width, control_height, window, 0, 0, 0);
 
     // font height.
-    HWND window_fontheight_label0 = CreateWindowA("STATIC", "Font height:", WS_CHILD | WS_VISIBLE | SS_CENTER,
-						  outer_padding, outer_padding + (line_padding*2),
-						  label_width, control_height, window, 0, 0, 0);
-
-    // no more than three characters! how can we make sure of this?
-    HWND window_fontheight_field = CreateWindowA("EDIT", height_field, WS_CHILD | WS_VISIBLE | WS_BORDER | ES_NUMBER | ES_CENTER,
-						 outer_padding + label_width + inner_padding, outer_padding + (line_padding*2),
-						 (field_width*0.1), control_height, window, 0, 0, 0);
-    
-    HWND window_fontheight_label1 = CreateWindowA("STATIC", "pt", WS_CHILD | WS_VISIBLE | SS_CENTER,
-						  outer_padding + label_width + (field_width*0.1) + (inner_padding*2), outer_padding + (line_padding*2),
-					          (label_width*0.15), control_height, window, 0, 0, 0);
+    HWND window_fontheight_label0 = CreateWindowA("STATIC", "Font height:", WS_CHILD | WS_VISIBLE | SS_CENTER, outer_padding, outer_padding + (line_padding*2), label_width, control_height, window, 0, 0, 0);
+    HWND window_fontheight_field  = CreateWindowA("EDIT", height_field, WS_CHILD | WS_VISIBLE | WS_BORDER | ES_NUMBER | ES_CENTER, outer_padding + label_width + inner_padding, outer_padding + (line_padding*2), (field_width*0.1), control_height, window, 0, 0, 0); // no more than three characters! how can we make sure of this?
+    HWND window_fontheight_label1 = CreateWindowA("STATIC", "pt", WS_CHILD | WS_VISIBLE | SS_CENTER, outer_padding + label_width + (field_width*0.1) + (inner_padding*2), outer_padding + (line_padding*2), (label_width*0.15), control_height, window, 0, 0, 0);
 
     // bake.
-    HWND window_bake_button = CreateWindowA("BUTTON", "Bake", WS_CHILD | WS_VISIBLE| WS_BORDER,
-					    outer_padding, outer_padding + (line_padding*3), pane_width - (outer_padding*2), control_height, window, (HMENU)BAKE_BUTTON, 0, 0);
-    
+    HWND window_bake_button = CreateWindowA("BUTTON", "Bake", WS_CHILD | WS_VISIBLE| WS_BORDER, outer_padding, outer_padding + (line_padding*3), pane_width - (outer_padding*2), control_height, window, (HMENU)WINDOWS_BUTTON_BAKE, 0, 0);
 
-    //  send messages.
+    // send messages.
     SendMessageA(window_truetype_label,    WM_SETFONT, (WPARAM)font, TRUE);
     SendMessageA(window_truetype_button,   WM_SETFONT, (WPARAM)font, TRUE);
     SendMessageA(window_truetype_field,    WM_SETFONT, (WPARAM)font, TRUE); 
@@ -831,7 +799,7 @@ LRESULT WINAPI windows_procedure_message(HWND window, UINT message, WPARAM wpara
     {
 	switch(wparam)
 	{
-	case SELECT_OPEN_BUTTON:
+	case WINDOWS_BUTTON_TRUETYPE:
 	{
 	    OPENFILENAME o_file = {};
 	    o_file.lStructSize  = sizeof(OPENFILENAME);
@@ -847,7 +815,7 @@ LRESULT WINAPI windows_procedure_message(HWND window, UINT message, WPARAM wpara
 		SetWindowTextA(window_truetype_field, o_file.lpstrFile);
 	    }
 	}break;
-	case SELECT_SAVE_BUTTON:
+	case WINDOWS_BUTTON_SAVE:
 	{
 	    OPENFILENAME s_file = {};
 	    s_file.lStructSize  = sizeof(OPENFILENAME);
@@ -863,7 +831,7 @@ LRESULT WINAPI windows_procedure_message(HWND window, UINT message, WPARAM wpara
 		SetWindowTextA(window_save_field, s_file.lpstrFile);
 	    }
 	}break;
-	case BAKE_BUTTON:
+	case WINDOWS_BUTTON_BAKE:
 	{
 	    GetWindowTextA(window_truetype_field, open_file, MAX_PATH);
 	    GetWindowTextA(window_save_field, save_file, MAX_PATH);
@@ -892,8 +860,9 @@ LRESULT WINAPI windows_procedure_message(HWND window, UINT message, WPARAM wpara
 		HWND bitmap_window = CreateWindowA("STATIC", 0, WS_CHILD | WS_VISIBLE | SS_BITMAP | WS_BORDER,
 						   outer_padding + pane_width, outer_padding,
 						   0, 0, window, 0, 0, 0);
-		
-		HBITMAP bitmap = (HBITMAP)LoadImageA(0, bitmap_file, IMAGE_BITMAP, pane_width - (outer_padding*2), pane_width - (outer_padding*2), LR_LOADFROMFILE | LR_MONOCHROME);
+		HBITMAP bitmap = (HBITMAP)LoadImageA(0, bitmap_file, IMAGE_BITMAP,
+						     pane_width - (outer_padding*2),
+						     pane_width - (outer_padding*2), LR_LOADFROMFILE);
 		SendMessageA(bitmap_window, STM_SETIMAGE, IMAGE_BITMAP, (LPARAM)bitmap);
 	    }
 	    else
