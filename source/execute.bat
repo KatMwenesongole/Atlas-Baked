@@ -1,2 +1,2 @@
 @echo off
-a:/build/atlas.exe
+a:/build/Atlas Baked (windows).exe
