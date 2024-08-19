@@ -31,12 +31,16 @@
 
 #include <windows.h>
 #include <shellscalingapi.h>
+#include <shlwapi.h>
 
-#include "p:/shared/shared.cpp"
-#include "p:/shared/shared_utils.cpp"
-#include "p:/shared/shared_windows.cpp"
-#include "p:/shared/shared_math.cpp"
-#include "p:/shared/shared_string.cpp"
+#include "p:/Handmade/handmade.cpp"
+#include "p:/Handmade/handmade_os.cpp"
+#include "p:/Handmade/handmade_opengl.cpp"
+#include "p:/Handmade/handmade_opengl_windows.cpp"
+//#include "p:/Handmade/handmade_utils.cpp"
+#include "p:/Handmade/handmade_windows.cpp"
+#include "p:/Handmade/handmade_math.cpp"
+#include "p:/Handmade/handmade_string.cpp"
 
 #include <cstdio>
 
@@ -344,19 +348,19 @@ bake_loadfont(font_header* atlas, r32 points, s32 pixels, s8* font_file, u32** g
 				    ANTIALIASED_QUALITY,
 				    DEFAULT_PITCH | FF_DONTCARE,
 				    font_family);
+    
 
     if(font_handle)
     {
 	HDC device_context = CreateCompatibleDC(GetDC(0));
-
 	if(device_context)
 	{
 	    SetMapMode(device_context, MM_TEXT);
 	    
 	    BITMAPINFO bitmap_info              = {};
 	    bitmap_info.bmiHeader.biSize        =  sizeof(bitmap_info.bmiHeader);
-	    bitmap_info.bmiHeader.biWidth       =  pixels*2;
-	    bitmap_info.bmiHeader.biHeight      =  pixels*2; // (+) bottom-up, (-) top-down
+	    bitmap_info.bmiHeader.biWidth       =  pixels;
+	    bitmap_info.bmiHeader.biHeight      =  pixels; // (+) bottom-up, (-) top-down
 	    bitmap_info.bmiHeader.biPlanes      =  1;
 	    bitmap_info.bmiHeader.biBitCount    =  32;
 	    bitmap_info.bmiHeader.biCompression =  BI_RGB;
@@ -410,35 +414,13 @@ bake_loadfont(font_header* atlas, r32 points, s32 pixels, s8* font_file, u32** g
 	    GetTextMetrics(device_context, &metrics);
 	    atlas->line_spacing = metrics.tmInternalLeading;
 
-	    // sort by area.
-	    // for(u32 g = 0; g < GLYPH_COUNT; g++)
-	    // {
-	    // 	for(s32 h = 0; h < GLYPH_COUNT; h++)
-	    // 	{
-	    // 	    if((atlas->glyphs[g].width * atlas->glyphs[g].height) < (atlas->glyphs[h].width * atlas->glyphs[h].height))
-	    // 	    {
-	    // 		// swap.
-	    // 		u32*  glyph_ptr = glyphs[g];
-	    // 		glyph_header glyph_info = atlas->glyphs[g];
-
-	    // 		CopyMemory(&glyphs[g], &glyphs[h], sizeof(u32*));
-	    // 		CopyMemory(&atlas->glyphs[g], &atlas->glyphs[h], sizeof(glyph_header));
-
-	    // 		CopyMemory(&glyphs[h], &glyph_ptr, sizeof(u32*));
-	    // 		CopyMemory(&atlas->glyphs[h], &glyph_info, sizeof(glyph_header));
-		    
-	    // 		h = -1;
-	    // 	    }
-	    
-	    // 	}
-	    // }
-
 	    success = true;
 	}
 	else
 	{
 	    OutputDebugStringA("'CreateCompatibleDC' failed!\n");
 	}
+	DeleteObject(font_handle);
     }
     else
     {
@@ -462,8 +444,8 @@ bake_font()
 {
     b32 success = false;
 
-    r32 points = (strtof(fontheight_field,0))/2.0f; // total height (ascent + descent)
-    s32 pixels = (points/72)*96*(DPI/100);          // total height (ascent + descent)
+    r32 points = strtof(fontheight_field,0); 
+    s32 pixels = (points/72)*96*(DPI/100);          
     
     u32* glyphs[GLYPH_COUNT] = {};
 	 
@@ -478,76 +460,74 @@ bake_font()
     atlas->byte_offset  = sizeof(font_header);
 
     // does the ttf file exist?
-    // use windows to query instead of this 
-    io_file file = io_readfile(open_file);
-    if(file.source)
+    if(PathFileExistsA(open_file))
     {
-	io_freefile(file);
-    }
-    else
-    {
-	return(success);
-    }
-    
-    if(bake_loadfont(atlas, points, pixels, open_file, glyphs))
-    {
-	s8* glyph_data = (s8*)atlas + atlas->byte_offset;
-	for(s32 g = GLYPH_COUNT - 1; g > -1; g--)
+	if(bake_loadfont(atlas, points, pixels, open_file, glyphs))
 	{
-	    u32 target_row    = g / GLYPH_COLUMNS;
-	    u32 target_column = g % GLYPH_COLUMNS;
+	    s8* glyph_data = (s8*)atlas + atlas->byte_offset;
+	    for(s32 g = GLYPH_COUNT - 1; g > -1; g--)
+	    {
+		u32 target_row    = g / GLYPH_COLUMNS;
+		u32 target_column = g % GLYPH_COLUMNS;
 
-	    // the row height is equal to atlas->glyph_height.
+		// the row height is equal to atlas->glyph_height.
 		
-	    // bytes contained in a single row =
-	    // atlas->glyph_height * atlas->width * 4
+		// bytes contained in a single row =
+		// atlas->glyph_height * atlas->width * 4
 
-	    // bytes contained in a single glyph  row =
-	    // atlas->glyph_width * 4
+		// bytes contained in a single glyph  row =
+		// atlas->glyph_width * 4
 
-	    // glyph beginning row =
-	    // (target_row * 'bytes contained in a single row') + (target_column * 'bytes contained in a single glyph row')
+		// glyph beginning row =
+		// (target_row * 'bytes contained in a single row') + (target_column * 'bytes contained in a single glyph row')
 
-	    // bytes contianed in a single glyph =
-	    // atlas->glyph_width * atlas->glyph_height * 4
+		// bytes contianed in a single glyph =
+		// atlas->glyph_width * atlas->glyph_height * 4
 
-	    // bytes contianed in entire glyph atlas =
-	    // 'bytes contianed in a single glyph' * GLYPH_ROWS * GLYPH_COLUMNS
+		// bytes contianed in entire glyph atlas =
+		// 'bytes contianed in a single glyph' * GLYPH_ROWS * GLYPH_COLUMNS
 
-	    // points to the first row of bytes where the glyph_header should be placed. (bottom-up)
-	    s8* target =
-	    (glyph_data + (atlas->width * atlas->height * 4) - (atlas->width * atlas->glyph_height * 4))
-	    +
-	    (atlas->glyph_width * 4 * target_column)
-	    -
-	    (atlas->width * atlas->glyph_height * 4 * target_row);
+		// points to the first row of bytes where the glyph_header should be placed. (bottom-up)
+		s8* target =
+		(glyph_data + (atlas->width * atlas->height * 4) - (atlas->width * atlas->glyph_height * 4))
+		+
+		(atlas->glyph_width * 4 * target_column)
+		-
+		(atlas->width * atlas->glyph_height * 4 * target_row);
 
-	    s8* source = (s8*)(glyphs[g]);
+		s8* source = (s8*)(glyphs[g]);
 		
-	    bake_writeglyph(source, atlas->glyphs[g].width, atlas->glyphs[g].height, atlas->glyphs[g].width, target, atlas->width);
+		bake_writeglyph(source, atlas->glyphs[g].width, atlas->glyphs[g].height, atlas->glyphs[g].width, target, atlas->width);
 
-	    // uv.
-	    atlas->glyphs[g].u0 = (target_column * atlas->glyph_width)/(r32)atlas->width;
-	    atlas->glyphs[g].v0 = ((((GLYPH_ROWS - 1) - target_row) * atlas->glyph_height) + atlas->glyphs[g].height)/(r32)atlas->height;
-	    atlas->glyphs[g].u1 = ((target_column * atlas->glyph_width) + atlas->glyphs[g].width)/(r32)atlas->width;
-	    atlas->glyphs[g].v1 = (((GLYPH_ROWS - 1) - target_row) * atlas->glyph_height)/(r32)atlas->height;
-	}
+		// uv.
+		atlas->glyphs[g].u0 = (target_column * atlas->glyph_width)/(r32)atlas->width;
+		atlas->glyphs[g].v0 = ((((GLYPH_ROWS - 1) - target_row) * atlas->glyph_height) + atlas->glyphs[g].height)/(r32)atlas->height;
+		atlas->glyphs[g].u1 = ((target_column * atlas->glyph_width) + atlas->glyphs[g].width)/(r32)atlas->width;
+		atlas->glyphs[g].v1 = (((GLYPH_ROWS - 1) - target_row) * atlas->glyph_height)/(r32)atlas->height;
+	    }
 	
-	bake_clearglyphs(glyphs);
+	    bake_clearglyphs(glyphs);
 
-	// write font (.font)
-	io_writefile(save_file, atlas->size, atlas);
-	// write bitmap (.bmp)
-	bitmap_saveas(bitmap_file, atlas->width, atlas->height, (s8*)atlas + atlas->byte_offset);
+	    // write font (.font)
+	    io_writefile(save_file, atlas->size, atlas);
+	    // write bitmap (.bmp)
+	    bitmap_saveas(bitmap_file, atlas->width, atlas->height, (s8*)atlas + atlas->byte_offset);
 
-	//VirtualFree(tree.head, 0, MEM_RELEASE);
-	VirtualFree(atlas, 0, MEM_RELEASE);
+	    //VirtualFree(tree.head, 0, MEM_RELEASE);
+	    VirtualFree(atlas, 0, MEM_RELEASE);
 
-	success = true;
+	    success = true;
+	}
+	else
+	{
+	    OutputDebugStringA("'windows_loadfont' failed!\n");
+	}
     }
     else
     {
 	OutputDebugStringA("'windows_loadfont' failed!\n");
+
+	// error: specified truetype file does not exist.
     }
     
     return(success);
