@@ -1,10 +1,10 @@
-### USE WITH GUI:\n
-   (1) PLACE THE EXECUTABLE ANYWHERE YOU LIKE (/build/Atlas Baked (windows).exe) <br/>
-   (2) RUN <br/>
+### USE WITH GUI:
+1. Place the executable anywhere. (```/build/Atlas Baked (windows).exe```) <br/>
+2. Run. <br/>
 ### USE WITHOUT GUI (FROM COMMAND LINE):
-   (1) PLACE THE EXECUTABLE ANYWHERE YOU LIKE (/build/Atlas Baked (windows).exe) <br/>
-   (2) RUN WITH THREE ARGUMENTS <br/>
-       -ttf = TRUETYPE FONT FILE <br/>
-       -s   = SAVE FILE/LOCATION <br/>
-       -h   = FONT HEIGHT (IN POINTS) <br/>
-       > E.G Atlas" "Baked" "^(windows^).exe -ttf"/../truetype font.ttf" -s"/../output.font" -h"72"
+1. Place the executable anywhere. (```/build/Atlas Baked (windows).exe```) <br/>
+2. Run with three arguments. <br/>
+-ttf = TRUETYPE FONT FILE <br/>
+-s = SAVE FILE/LOCATION <br/>
+-h = FONT HEIGHT (IN POINTS) <br/>
+```Atlas" "Baked" "^(windows^).exe -ttf"input.ttf" -s"output.font" -h"72"```
