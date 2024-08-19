@@ -337,7 +337,7 @@ bake_loadfont(font_header* atlas, r32 points, s32 pixels, s8* font_file, u32** g
     s8 font_family[256] = {};
     ttf_fontfamily(font_file, font_family);
 
-    HFONT font_handle = CreateFontA(-MulDiv((points/2.0), GetDeviceCaps(GetDC(0), LOGPIXELSY), 72), 0, 0, 0,
+    HFONT font_handle = CreateFontA(-MulDiv(points/2.0, GetDeviceCaps(GetDC(0), LOGPIXELSY), 72), 0, 0, 0,
 				    FW_NORMAL,   // weight
 				    FALSE,       // italic
 				    FALSE,       // underline
@@ -359,8 +359,8 @@ bake_loadfont(font_header* atlas, r32 points, s32 pixels, s8* font_file, u32** g
 	    
 	    BITMAPINFO bitmap_info              = {};
 	    bitmap_info.bmiHeader.biSize        =  sizeof(bitmap_info.bmiHeader);
-	    bitmap_info.bmiHeader.biWidth       =  pixels;
-	    bitmap_info.bmiHeader.biHeight      =  pixels; // (+) bottom-up, (-) top-down
+	    bitmap_info.bmiHeader.biWidth       =  pixels * 2;
+	    bitmap_info.bmiHeader.biHeight      =  pixels * 2; // (+) bottom-up, (-) top-down
 	    bitmap_info.bmiHeader.biPlanes      =  1;
 	    bitmap_info.bmiHeader.biBitCount    =  32;
 	    bitmap_info.bmiHeader.biCompression =  BI_RGB;
@@ -462,7 +462,7 @@ bake_font()
     // does the ttf file exist?
     if(PathFileExistsA(open_file))
     {
-	if(bake_loadfont(atlas, points, pixels, open_file, glyphs))
+	if(bake_loadfont(atlas, points/2.0, pixels/2, open_file, glyphs))
 	{
 	    s8* glyph_data = (s8*)atlas + atlas->byte_offset;
 	    for(s32 g = GLYPH_COUNT - 1; g > -1; g--)
@@ -528,6 +528,104 @@ bake_font()
 	OutputDebugStringA("'windows_loadfont' failed!\n");
 
 	// error: specified truetype file does not exist.
+    }
+    
+    return(success);
+}
+
+internal b32
+bake_parsecommandline(s8* cmd, s32 size, s8* ttf_file, s8* font_file, s8* font_height)
+{
+    b32 success = true;
+
+    s32 s = 0;
+    
+    // is this provided?
+    b32    ttf_given = false;
+    b32   font_given = false;
+    b32 height_given = false;
+    
+    while(!(ttf_given && font_given && height_given))
+    {
+	b32 found_arg = false;
+	
+	while(!found_arg)
+	{
+	    if(cmd[s] == '-')
+	    {
+		found_arg = true;
+		break;
+	    }
+	    if(!(s < size))
+	    {
+		return(false); // ?
+	    }
+	    s++;
+	}
+
+	if(found_arg)
+	{
+	    if(cmd[s+1] == 't' &&
+	       cmd[s+2] == 't' &&
+	       cmd[s+3] == 'f' )      // is it ttf?
+	    {
+		s8* d = &cmd[s + 5];
+		s32 ttf_size = 0;
+		while(*d != '"')
+		{
+		    d++;
+		    ttf_size++;
+		}
+		mem_copy(&cmd[s + 5], ttf_file, ttf_size);
+		ttf_given = true;
+
+		s += ttf_size + 6;
+	    }
+	    else if(cmd[s+1] == 's') // is it save file? 
+	    {
+		s8* d = &cmd[s + 3];
+		s32 font_size = 0;
+		while(*d != '"')
+		{
+		    d++;
+		    font_size++;
+		}
+		mem_copy(&cmd[s + 3], font_file, font_size);
+		font_given = true;
+
+		s += font_size + 3;
+	    }
+	    else if(cmd[s+1] == 'h') // is it font height?
+	    {
+		s8* d = &cmd[s + 3];
+		s32 height_size = 0;
+		while(*d != '"')
+		{
+		    d++;
+		    height_size++;
+		}
+		// *d = '\0'; // trick? 
+		// *font_height = string_to_integer(&cmd[s + 5]); best solution!
+		
+		if(height_size > 3)
+		{
+		    success = false; // too big.
+		}
+		mem_copy(&cmd[s + 3], font_height, height_size);
+		
+		height_given = true;
+
+		s += height_size + 3;
+	    }
+
+	    found_arg = false;
+	}
+
+	if(!(s < size))
+	{
+	    success = false;
+	    break;
+	}
     }
     
     return(success);
@@ -729,7 +827,7 @@ WinMain (HINSTANCE          instance,
     if(commandline[0] == '\0')
     {
 	WNDCLASSA window_class = {};
-	window_class.style 	       = CS_OWNDC | CS_HREDRAW | CS_VREDRAW;
+	window_class.style 	   = CS_OWNDC | CS_HREDRAW | CS_VREDRAW;
 	window_class.lpfnWndProc   = windows_procedure_message;
 	window_class.hInstance     = instance;
 	window_class.hCursor       = LoadCursorA(0, IDC_ARROW);
@@ -794,6 +892,47 @@ WinMain (HINSTANCE          instance,
 	//
 	// Atlas Baked.exe -ttf"a:/truetype/DMMono-Regular.ttf" -s"a:/test/DMMono_72.font" -h"72"
 	//
+
+	if(!AttachConsole((DWORD)-1))
+	{
+	    // strange!	ASSERT maybe!
+	}
+	HANDLE output_handle = GetStdHandle(STD_OUTPUT_HANDLE);
+
+	s32 size = lstrlen(commandline);
+
+	if(bake_parsecommandline(commandline, size, open_file, save_file, fontheight_field))
+	{
+	    bake_font();
+
+	    const s8* message = "success!";
+	    s32 message_size = sizeof("succes!");
+
+	    DWORD bytes_written = 0;
+	    if(WriteFile(output_handle, message, message_size, &bytes_written, 0))
+	    {
+		// we did it?
+	    }
+	    else
+	    {
+		// ???
+	    }
+	}
+	else
+	{
+	    const s8* message = "error: did you provide all three arguments?\n   -ttf (truetype font file)\n   -s (save location)\n   -h (font height)\n";
+	    s32 message_size = sizeof("error: did you provide all three arguments?\n   -ttf (truetype font file)\n   -s (save location)\n   -h (font height)\n");
+
+	    DWORD bytes_written = 0;
+	    if(WriteFile(output_handle, message, message_size, &bytes_written, 0))
+	    {
+		// we did it?
+	    }
+	    else
+	    {
+		// ???
+	    }
+	}
     }
 
     return(0);
